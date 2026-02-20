@@ -1,0 +1,17 @@
+Source: pve-iscsi-multipath
+Section: admin
+Priority: optional
+Maintainer: Your Name <you@example.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+
+Package: pve-iscsi-multipath
+Architecture: all
+Depends: pve-manager (>= 9.0),
+         libpve-access-control-perl,
+         libpve-common-perl,
+         ${misc:Depends}
+Recommends: open-iscsi, multipath-tools, lvm2, sanlock
+Description: iSCSI and Multipath configuration plugin for Proxmox VE
+ Adds iSCSI and multipath management panels to the Proxmox VE web GUI,
+ including a datacenter-level setup wizard.

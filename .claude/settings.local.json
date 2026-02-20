@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:pve.proxmox.com)",
+      "WebFetch(domain:git.proxmox.com)",
+      "WebSearch",
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git config:*)",
+      "Bash(/home/jpolansky/proxmox-storage-plugin/debian/changelog:*)",
+      "Bash(printf:*)",
+      "Bash(chmod:*)",
+      "Bash(/home/jpolansky/proxmox-storage-plugin/debian/triggers:*)",
+      "Bash(/home/jpolansky/proxmox-storage-plugin/src/perl/PVE/API2/ISCSIMultipath.pm:*)",
+      "Bash(/home/jpolansky/proxmox-storage-plugin/src/js/pve-iscsi-multipath.js:*)"
+    ]
+  }
+}
