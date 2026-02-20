@@ -14,7 +14,7 @@ install:
 	install -m 0644 src/perl/PVE/API2/ISCSIMultipath.pm $(DESTDIR)$(PERL_DEST)/
 
 test:
-	prove -lv t/
+	PERL5LIB=t/lib prove -lv t/
 
 deb:
 	dpkg-buildpackage -us -uc -b
