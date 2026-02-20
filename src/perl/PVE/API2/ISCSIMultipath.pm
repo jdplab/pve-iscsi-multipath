@@ -3,6 +3,9 @@ package PVE::API2::ISCSIMultipath;
 use strict;
 use warnings;
 
+use PVE::JSONSchema qw(get_standard_option);
+use PVE::RPCEnvironment;
+
 use base qw(PVE::RESTHandler);
 
 # Parse output of: iscsiadm -m session -P 0
@@ -79,5 +82,87 @@ sub merge_multipath_config {
     }
     return $existing;
 }
+
+# Thin wrapper around system commands — can be mocked in tests
+sub _run_cmd {
+    my ($cmd, %opts) = @_;
+    require PVE::Tools;
+    PVE::Tools::run_command($cmd, %opts);
+}
+
+sub check_package_installed {
+    my ($pkg) = @_;
+    my $status = '';
+    eval { _run_cmd(['dpkg-query', '-W', '-f=${Status}', $pkg],
+                    outfunc => sub { $status .= $_[0] },
+                    errfunc => sub {}) };
+    return !$@ && $status =~ /install ok installed/;
+}
+
+sub check_service_active {
+    my ($service) = @_;
+    eval { _run_cmd(['systemctl', 'is-active', '--quiet', $service],
+                    outfunc => sub {}, errfunc => sub {}) };
+    return !$@;
+}
+
+sub check_service_enabled {
+    my ($service) = @_;
+    eval { _run_cmd(['systemctl', 'is-enabled', '--quiet', $service],
+                    outfunc => sub {}, errfunc => sub {}) };
+    return !$@;
+}
+
+__PACKAGE__->register_method({
+    name        => 'status',
+    path        => 'status',
+    method      => 'GET',
+    description => 'Get iSCSI and multipath status for this node.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => {
+            node => get_standard_option('pve-node'),
+        },
+    },
+    returns => { type => 'object' },
+    code => sub {
+        my ($param) = @_;
+
+        my %pkgs;
+        for my $p (qw(open-iscsi multipath-tools lvm2 sanlock)) {
+            (my $key = $p) =~ s/-/_/g;
+            $pkgs{$key} = check_package_installed($p) ? 1 : 0;
+        }
+
+        my %svcs;
+        for my $s (qw(iscsid multipathd lvmlockd sanlock)) {
+            $svcs{$s} = {
+                running => check_service_active($s)  ? 1 : 0,
+                enabled => check_service_enabled($s) ? 1 : 0,
+            };
+        }
+
+        my $session_out = '';
+        eval { _run_cmd(['iscsiadm', '-m', 'session', '-P', '0'],
+                        outfunc => sub { $session_out .= $_[0] . "\n" },
+                        errfunc => sub {}) };
+        my $sessions = parse_sessions($session_out);
+
+        my $mp_out = '';
+        eval { _run_cmd(['multipath', '-ll'],
+                        outfunc => sub { $mp_out .= $_[0] . "\n" },
+                        errfunc => sub {}) };
+        my $mp_devices = parse_multipath_status($mp_out);
+
+        return {
+            packages              => \%pkgs,
+            services              => \%svcs,
+            sessions              => $sessions,
+            multipath_config_exists => (-f '/etc/multipath.conf') ? 1 : 0,
+            multipath_devices     => $mp_devices,
+        };
+    },
+});
 
 1;
