@@ -296,6 +296,292 @@ Ext.define('PVE.node.MultipathPanel', {
     },
 });
 
+Ext.define('PVE.dc.ISCSISetupWizard', {
+    extend: 'Proxmox.window.Wizard',
+    xtype: 'pveDCISCSISetupWizard',
+
+    title: gettext('SAN Setup Wizard'),
+    width: 720,
+    height: 550,
+
+    // Track logins performed by this wizard session for rollback on Back
+    _wizardLogins: [],
+
+    initComponent: function () {
+        var me = this;
+
+        // Step 1: Select nodes + status
+        var nodeStatusStore = Ext.create('Ext.data.Store', {
+            fields: ['node', 'status', 'detail', 'checked',
+                     { name: '_statusData', type: 'auto' }],
+            data: [],
+        });
+
+        var nodeGrid = Ext.create('Ext.grid.Panel', {
+            store: nodeStatusStore,
+            columns: [
+                {
+                    xtype: 'checkcolumn',
+                    header: '',
+                    dataIndex: 'checked',
+                    width: 40,
+                },
+                { text: gettext('Node'),   dataIndex: 'node',   flex: 1 },
+                {
+                    text: gettext('Status'),
+                    dataIndex: 'status',
+                    width: 80,
+                    renderer: function (v) {
+                        var colors = { green: '#2c9142', yellow: '#e59400',
+                                       orange: '#d06020', red: '#cc2a2a' };
+                        return '<span style="color:' + (colors[v] || '#333') + '">' +
+                               Ext.String.htmlEncode(v) + '</span>';
+                    },
+                },
+                { text: gettext('Detail'), dataIndex: 'detail', flex: 2 },
+            ],
+        });
+
+        var checkNodeStatus = function () {
+            nodeStatusStore.each(function (rec) {
+                if (!rec.get('checked')) return;
+                var node = rec.get('node');
+                Proxmox.Utils.API2Request({
+                    url: '/api2/json/nodes/' + node + '/iscsi/status',
+                    method: 'GET',
+                    success: function (response) {
+                        var d = response.result.data;
+                        var pkgsOk = d.packages.open_iscsi && d.packages.multipath_tools;
+                        var svcsOk = d.services.iscsid.running && d.services.multipathd.running;
+                        var hasSessions = d.sessions.length > 0;
+                        var hasConfig = d.multipath_config_exists;
+
+                        var status, detail;
+                        if (!pkgsOk) {
+                            status = 'orange';
+                            detail = gettext('Packages missing');
+                        } else if (svcsOk && hasSessions && hasConfig) {
+                            status = 'green';
+                            detail = gettext('Fully configured');
+                        } else if (hasSessions || hasConfig) {
+                            status = 'yellow';
+                            detail = gettext('Partial') + ' (' + d.sessions.length +
+                                     ' sessions, config=' + (hasConfig ? 'yes' : 'no') + ')';
+                        } else {
+                            status = 'red';
+                            detail = gettext('Not configured');
+                        }
+                        rec.set('status', status);
+                        rec.set('detail', detail);
+                        rec.set('_statusData', d);
+                        rec.commit();
+                    },
+                });
+            });
+        };
+
+        // Load cluster nodes
+        Proxmox.Utils.API2Request({
+            url: '/api2/json/cluster/status',
+            method: 'GET',
+            success: function (response) {
+                var nodes = (response.result.data || []).filter(n => n.type === 'node');
+                nodeStatusStore.loadData(nodes.map(n => ({
+                    node: n.name,
+                    status: '...',
+                    detail: '',
+                    checked: true,
+                })));
+                checkNodeStatus();
+            },
+        });
+
+        // Step 2: Portals
+        var portalsStore = Ext.create('Ext.data.Store', {
+            fields: ['portal'],
+            data: [],
+        });
+
+        // Step 3: Targets
+        var targetsStore = Ext.create('Ext.data.Store', {
+            fields: ['target_iqn', 'portal', 'selected', 'already_connected'],
+            data: [],
+        });
+
+        // Step 4 data (populated after login transition)
+        var wwidsStore = Ext.create('Ext.data.Store', {
+            fields: ['wwid', 'alias', 'is_new'],
+            data: [],
+        });
+
+        Ext.apply(me, {
+            items: [
+                // --- Step 1 ---
+                {
+                    title: gettext('Select Nodes'),
+                    xtype: 'panel',
+                    itemId: 'step1',
+                    layout: 'fit',
+                    items: [nodeGrid],
+                    tbar: [{
+                        text: gettext('Refresh Status'),
+                        iconCls: 'fa fa-refresh',
+                        handler: checkNodeStatus,
+                    }],
+                },
+
+                // --- Step 2 ---
+                {
+                    title: gettext('Portals'),
+                    xtype: 'panel',
+                    itemId: 'step2',
+                    layout: 'fit',
+                    items: [{
+                        xtype: 'grid',
+                        itemId: 'portalsGrid',
+                        store: portalsStore,
+                        columns: [{ text: gettext('Portal IP:port'), dataIndex: 'portal', flex: 1 }],
+                        tbar: [
+                            {
+                                text: gettext('Add'),
+                                iconCls: 'fa fa-plus',
+                                handler: function () {
+                                    Ext.Msg.prompt(gettext('Add Portal'), gettext('Portal IP:'),
+                                        function (btn, val) {
+                                            if (btn !== 'ok' || !val) return;
+                                            var p = val.trim();
+                                            if (!p.match(/:/)) p += ':3260';
+                                            portalsStore.add({ portal: p });
+                                        });
+                                },
+                            },
+                            {
+                                text: gettext('Remove'),
+                                iconCls: 'fa fa-trash-o',
+                                handler: function () {
+                                    var g = me.down('#portalsGrid');
+                                    var sel = g.getSelection();
+                                    if (sel.length) portalsStore.remove(sel);
+                                },
+                            },
+                        ],
+                    }],
+                },
+
+                // --- Step 3 ---
+                {
+                    title: gettext('Select Targets'),
+                    xtype: 'panel',
+                    itemId: 'step3',
+                    layout: 'fit',
+                    items: [{
+                        xtype: 'grid',
+                        store: targetsStore,
+                        columns: [
+                            { xtype: 'checkcolumn', dataIndex: 'selected', header: '', width: 40 },
+                            { text: gettext('Target IQN'), dataIndex: 'target_iqn', flex: 2 },
+                            { text: gettext('Portal'),     dataIndex: 'portal',     flex: 1 },
+                            { text: gettext('Status'),     dataIndex: 'already_connected',
+                              renderer: function (v) { return v ? gettext('already connected') : ''; } },
+                        ],
+                    }],
+                    tbar: [{
+                        text: gettext('Discover'),
+                        iconCls: 'fa fa-search',
+                        handler: function () {
+                            var firstNode = null;
+                            nodeStatusStore.each(function (r) {
+                                if (r.get('checked') && !firstNode) firstNode = r.get('node');
+                            });
+                            if (!firstNode) {
+                                Ext.Msg.alert(gettext('Error'), gettext('Select at least one node.'));
+                                return;
+                            }
+                            var portals = portalsStore.collect('portal').join(',');
+                            Proxmox.Utils.API2Request({
+                                url: '/api2/json/nodes/' + firstNode + '/iscsi/discover',
+                                method: 'POST',
+                                params: { portals: portals },
+                                waitMsgTarget: me,
+                                success: function (response) {
+                                    var targets = response.result.data;
+                                    var statusRec = nodeStatusStore.findRecord('node', firstNode);
+                                    var sessions = (statusRec && statusRec.get('_statusData'))
+                                        ? statusRec.get('_statusData').sessions : [];
+                                    var connectedIqns = sessions.map(s => s.target_iqn);
+
+                                    // Deduplicate by IQN
+                                    var seen = {};
+                                    var unique = targets.filter(function (t) {
+                                        if (seen[t.target_iqn]) return false;
+                                        seen[t.target_iqn] = true;
+                                        return true;
+                                    });
+                                    targetsStore.loadData(unique.map(t => ({
+                                        target_iqn: t.target_iqn,
+                                        portal: t.portal,
+                                        selected: true,
+                                        already_connected: connectedIqns.includes(t.target_iqn),
+                                    })));
+                                },
+                                failure: function (r) {
+                                    Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+                                },
+                            });
+                        },
+                    }],
+                },
+
+                // --- Step 4 ---
+                {
+                    title: gettext('Multipath Config'),
+                    xtype: 'panel',
+                    itemId: 'step4',
+                    layout: {
+                        type: 'vbox',
+                        align: 'stretch',
+                    },
+                    items: [
+                        {
+                            xtype: 'container',
+                            itemId: 'mergeToggleContainer',
+                            html: '',
+                            margin: '5 5 0 5',
+                        },
+                        {
+                            xtype: 'grid',
+                            itemId: 'wwidsGrid',
+                            flex: 1,
+                            columns: [
+                                { text: 'WWID', dataIndex: 'wwid',  flex: 2 },
+                                {
+                                    text: gettext('Alias'),
+                                    dataIndex: 'alias',
+                                    flex: 1,
+                                    editor: { xtype: 'textfield', allowBlank: false },
+                                },
+                                {
+                                    text: gettext('New?'),
+                                    dataIndex: 'is_new',
+                                    renderer: function (v) { return v ? gettext('Yes') : ''; },
+                                    width: 60,
+                                },
+                            ],
+                            selModel: 'cellmodel',
+                            plugins: [{ ptype: 'cellediting', clicksToEdit: 1 }],
+                            store: wwidsStore,
+                        },
+                    ],
+                },
+
+                // Steps 5 & 6 added in Task 11
+            ],
+        });
+
+        me.callParent();
+    },
+});
+
 // Inject iSCSI and Multipath tabs into the node Config panel (storage group)
 Ext.define(null, {
     override: 'PVE.node.Config',
