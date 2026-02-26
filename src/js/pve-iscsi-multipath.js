@@ -200,3 +200,98 @@ Ext.define('PVE.node.ISCSIPanel', {
         reloadSessions();
     },
 });
+
+Ext.define('PVE.node.MultipathPanel', {
+    extend: 'Ext.panel.Panel',
+    xtype: 'pveNodeMultipathPanel',
+
+    layout: 'fit',
+
+    initComponent: function () {
+        var me = this;
+        var nodename = me.pveSelNode.data.node;
+        if (!nodename) throw 'no node name specified';
+
+        var statusStore = Ext.create('Ext.data.Store', {
+            fields: ['alias', 'wwid', 'paths', 'state'],
+            proxy: {
+                type: 'proxmox',
+                url: '/api2/json/nodes/' + nodename + '/iscsi/multipath/status',
+            },
+        });
+
+        var reload = function () { statusStore.load(); };
+
+        var editConfig = function () {
+            Proxmox.Utils.API2Request({
+                url: '/api2/json/nodes/' + nodename + '/iscsi/multipath/config',
+                method: 'GET',
+                success: function (response) {
+                    var content = response.result.data.content;
+                    Ext.create('Proxmox.window.Edit', {
+                        title: gettext('Edit /etc/multipath.conf'),
+                        width: 700,
+                        height: 500,
+                        url: '/nodes/' + nodename + '/iscsi/multipath/config',
+                        method: 'PUT',
+                        items: [{
+                            xtype: 'textarea',
+                            name: 'content',
+                            value: content,
+                            height: 400,
+                            fieldStyle: 'font-family: monospace; font-size: 12px;',
+                        }],
+                        listeners: { destroy: reload },
+                    }).show();
+                },
+                failure: function (r) {
+                    Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+                },
+            });
+        };
+
+        Ext.apply(me, {
+            items: [{
+                xtype: 'grid',
+                store: statusStore,
+                columns: [
+                    { text: gettext('Alias'),  dataIndex: 'alias',  flex: 1 },
+                    { text: 'WWID',            dataIndex: 'wwid',   flex: 2 },
+                    { text: gettext('Paths'),  dataIndex: 'paths',  width: 70, align: 'right' },
+                    { text: gettext('State'),  dataIndex: 'state',  width: 100 },
+                ],
+                tbar: [
+                    {
+                        text: gettext('Reload'),
+                        iconCls: 'fa fa-refresh',
+                        handler: reload,
+                    },
+                    {
+                        text: gettext('Edit Config'),
+                        iconCls: 'fa fa-pencil',
+                        handler: editConfig,
+                    },
+                    {
+                        text: gettext('Restart multipathd'),
+                        iconCls: 'fa fa-refresh',
+                        handler: function () {
+                            Proxmox.Utils.API2Request({
+                                url: '/nodes/' + nodename + '/iscsi/multipath/config',
+                                method: 'PUT',
+                                params: { content: '', merge: 1 },
+                                waitMsgTarget: me,
+                                success: reload,
+                                failure: function (r) {
+                                    Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+                                },
+                            });
+                        },
+                    },
+                ],
+            }],
+        });
+
+        me.callParent();
+        reload();
+    },
+});
