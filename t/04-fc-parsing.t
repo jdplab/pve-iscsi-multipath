@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 12;
+use Test::More tests => 13;
 use File::Temp qw(tempdir);
 use File::Path qw(make_path);
 
@@ -81,3 +81,14 @@ is(scalar @{PVE::API2::ISCSIMultipath::parse_fc_targets(tempdir(CLEANUP=>1))}, 0
 make_path("$hba_base/host1");  # host1 has no attribute files
 my $hbas2 = PVE::API2::ISCSIMultipath::parse_fc_hbas($hba_base);
 is(scalar @$hbas2, 2, 'parse_fc_hbas: handles missing attribute files gracefully');
+
+# parse_fc_targets with missing attribute files — must not die
+my $rp_base2 = tempdir(CLEANUP => 1);
+my $rport3 = "$rp_base2/rport-0:0-1";
+make_path($rport3);
+# Write roles but nothing else
+open my $fh3, '>', "$rport3/roles" or die;
+print $fh3 'FCP Target';
+close $fh3;
+my $targets2 = PVE::API2::ISCSIMultipath::parse_fc_targets($rp_base2);
+is(scalar @$targets2, 1, 'parse_fc_targets: handles missing attribute files gracefully');
