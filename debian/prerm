@@ -1,0 +1,30 @@
+#!/bin/bash
+set -e
+
+HTML_TPL="/usr/share/pve-manager/index.html.tpl"
+NODES_PM="/usr/share/perl5/PVE/API2/Nodes.pm"
+
+remove_markers() {
+    local file="$1"
+    if [ ! -f "$file" ]; then
+        return
+    fi
+    if grep -q "BEGIN pve-iscsi-multipath" "$file"; then
+        # Remove Perl-style marker blocks
+        sed -i '/# BEGIN pve-iscsi-multipath/,/# END pve-iscsi-multipath/d' "$file"
+        # Remove HTML-style marker blocks
+        sed -i '/<!-- BEGIN pve-iscsi-multipath -->/,/<!-- END pve-iscsi-multipath -->/d' "$file"
+        echo "Removed pve-iscsi-multipath markers from $file"
+    fi
+}
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        remove_markers "$HTML_TPL"
+        remove_markers "$NODES_PM"
+        systemctl restart pveproxy pvedaemon || true
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

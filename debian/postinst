@@ -1,0 +1,113 @@
+#!/bin/bash
+set -e
+
+HTML_TPL="/usr/share/pve-manager/index.html.tpl"
+NODES_PM="/usr/share/perl5/PVE/API2/Nodes.pm"
+
+PKG_VERSION=$(dpkg-query -W -f='${Version}' pve-iscsi-multipath 2>/dev/null || echo "0")
+
+patch_html_template() {
+    if grep -q "BEGIN pve-iscsi-multipath" "$HTML_TPL" 2>/dev/null; then
+        echo "index.html.tpl already patched - skipping."
+        return
+    fi
+    if ! grep -q "pvemanagerlib.js" "$HTML_TPL" 2>/dev/null; then
+        echo "ERROR: pvemanagerlib.js not found in $HTML_TPL — aborting patch." >&2
+        exit 1
+    fi
+    python3 - "$HTML_TPL" "$PKG_VERSION" <<'PYEOF'
+import sys
+path = sys.argv[1]
+version = sys.argv[2]
+
+with open(path, 'r') as f:
+    lines = f.readlines()
+
+insert = [
+    '    <!-- BEGIN pve-iscsi-multipath -->\n',
+    '    <script type="text/javascript" src="/pve2/js/pve-iscsi-multipath.js?ver=' + version + '"></script>\n',
+    '    <!-- END pve-iscsi-multipath -->\n',
+]
+
+out = []
+for line in lines:
+    out.append(line)
+    if 'pvemanagerlib.js' in line:
+        out.extend(insert)
+
+with open(path, 'w') as f:
+    f.writelines(out)
+
+print("index.html.tpl patched.")
+PYEOF
+}
+
+patch_nodes_pm() {
+    if grep -q "BEGIN pve-iscsi-multipath" "$NODES_PM" 2>/dev/null; then
+        echo "Nodes.pm already patched - skipping."
+        return
+    fi
+    if ! grep -q "use PVE::API2::Disks;" "$NODES_PM" 2>/dev/null; then
+        echo "ERROR: 'use PVE::API2::Disks;' not found in $NODES_PM — aborting patch." >&2
+        exit 1
+    fi
+    if ! grep -q 'subclass.*PVE::API2::Disks' "$NODES_PM" 2>/dev/null; then
+        echo "ERROR: Disks subclass registration not found in $NODES_PM — aborting patch." >&2
+        exit 1
+    fi
+    python3 - <<'PYEOF'
+import re, sys
+
+path = '/usr/share/perl5/PVE/API2/Nodes.pm'
+with open(path, 'r') as f:
+    content = f.read()
+
+# Insert 'use' statement after 'use PVE::API2::Disks;'
+use_insert = (
+    "\n# BEGIN pve-iscsi-multipath\n"
+    "use PVE::API2::ISCSIMultipath;\n"
+    "# END pve-iscsi-multipath\n"
+)
+content = content.replace(
+    'use PVE::API2::Disks;',
+    'use PVE::API2::Disks;' + use_insert,
+    1
+)
+
+# Insert register_method block after the Disks subclass registration
+reg_insert = (
+    "\n# BEGIN pve-iscsi-multipath\n"
+    "__PACKAGE__->register_method({\n"
+    "    subclass => \"PVE::API2::ISCSIMultipath\",\n"
+    "    path => 'iscsi',\n"
+    "});\n"
+    "# END pve-iscsi-multipath\n"
+)
+
+pattern = r'(__PACKAGE__->register_method\(\s*\{[^}]*subclass\s*=>\s*"PVE::API2::Disks"[^}]*\}\s*\);)'
+content, n = re.subn(
+    pattern,
+    lambda m: m.group(0) + reg_insert,
+    content,
+    flags=re.DOTALL
+)
+if n == 0:
+    print("ERROR: could not find Disks register_method block", file=sys.stderr)
+    sys.exit(1)
+
+with open(path, 'w') as f:
+    f.write(content)
+print("Nodes.pm patched.")
+PYEOF
+}
+
+case "$1" in
+    configure|triggered)
+        patch_html_template
+        patch_nodes_pm
+        systemctl restart pveproxy pvedaemon || true
+        ;;
+esac
+
+#DEBHELPER#
+exit 0
