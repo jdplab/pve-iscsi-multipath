@@ -165,4 +165,252 @@ __PACKAGE__->register_method({
     },
 });
 
+
+__PACKAGE__->register_method({
+    name        => 'discover',
+    path        => 'discover',
+    method      => 'POST',
+    description => 'Run iSCSI target discovery against one or more portals.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => {
+            node    => get_standard_option('pve-node'),
+            portals => {
+                type        => 'string',
+                description => 'Comma-separated list of portal IPs (optionally with :port)',
+            },
+        },
+    },
+    returns => { type => 'array', items => { type => 'object' } },
+    code => sub {
+        my ($param) = @_;
+        my @portals = split /,/, $param->{portals};
+        my @all_targets;
+        for my $portal (@portals) {
+            $portal =~ s/^\s+|\s+$//g;
+            $portal .= ':3260' unless $portal =~ /:\d+$/;
+            my $out = '';
+            eval {
+                _run_cmd(['iscsiadm', '-m', 'discovery', '-t', 'sendtargets', '-p', $portal],
+                         outfunc => sub { $out .= $_[0] . "\n" },
+                         errfunc => sub {});
+            };
+            push @all_targets, @{parse_discovery($out)};
+        }
+        my %seen;
+        return [grep { !$seen{"$_->{target_iqn}|$_->{portal}"}++ } @all_targets];
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'sessions',
+    path        => 'sessions',
+    method      => 'GET',
+    description => 'List active iSCSI sessions.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => { node => get_standard_option('pve-node') },
+    },
+    returns => { type => 'array', items => { type => 'object' } },
+    code => sub {
+        my ($param) = @_;
+        my $out = '';
+        eval { _run_cmd(['iscsiadm', '-m', 'session', '-P', '0'],
+                        outfunc => sub { $out .= $_[0] . "\n" },
+                        errfunc => sub {}) };
+        return parse_sessions($out);
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'login',
+    path        => 'login',
+    method      => 'POST',
+    description => 'Login to an iSCSI target on a portal. No-ops if already connected.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => {
+            node       => get_standard_option('pve-node'),
+            target_iqn => { type => 'string', description => 'Target IQN' },
+            portal     => { type => 'string', description => 'Portal IP:port' },
+        },
+    },
+    returns => { type => 'object', properties => {
+        already_connected => { type => 'boolean' },
+    }},
+    code => sub {
+        my ($param) = @_;
+        my $out = '';
+        eval { _run_cmd(['iscsiadm', '-m', 'session', '-P', '0'],
+                        outfunc => sub { $out .= $_[0] . "\n" },
+                        errfunc => sub {}) };
+        my $sessions = parse_sessions($out);
+        for my $s (@$sessions) {
+            if ($s->{target_iqn} eq $param->{target_iqn} &&
+                $s->{portal} eq $param->{portal}) {
+                return { already_connected => 1 };
+            }
+        }
+        _run_cmd(['iscsiadm', '-m', 'node',
+                  '-T', $param->{target_iqn},
+                  '-p', $param->{portal},
+                  '--login']);
+        return { already_connected => 0 };
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'logout',
+    path        => 'logout',
+    method      => 'POST',
+    description => 'Logout from an iSCSI target on a portal.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => {
+            node       => get_standard_option('pve-node'),
+            target_iqn => { type => 'string' },
+            portal     => { type => 'string' },
+        },
+    },
+    returns => { type => 'null' },
+    code => sub {
+        my ($param) = @_;
+        _run_cmd(['iscsiadm', '-m', 'node',
+                  '-T', $param->{target_iqn},
+                  '-p', $param->{portal},
+                  '--logout']);
+        return undef;
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'set_startup',
+    path        => 'startup',
+    method      => 'PUT',
+    description => 'Set auto-login mode for an iSCSI target.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => {
+            node       => get_standard_option('pve-node'),
+            target_iqn => { type => 'string' },
+            portal     => { type => 'string' },
+            mode       => {
+                type => 'string',
+                enum => ['automatic', 'manual', 'onboot'],
+            },
+        },
+    },
+    returns => { type => 'null' },
+    code => sub {
+        my ($param) = @_;
+        _run_cmd(['iscsiadm', '-m', 'node',
+                  '-T', $param->{target_iqn},
+                  '-p', $param->{portal},
+                  '--op', 'update',
+                  '-n', 'node.startup',
+                  '-v', $param->{mode}]);
+        return undef;
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'multipath_status',
+    path        => 'multipath/status',
+    method      => 'GET',
+    description => 'Get current multipath device status.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => { node => get_standard_option('pve-node') },
+    },
+    returns => { type => 'array', items => { type => 'object' } },
+    code => sub {
+        my ($param) = @_;
+        my $out = '';
+        eval { _run_cmd(['multipath', '-ll'],
+                        outfunc => sub { $out .= $_[0] . "\n" },
+                        errfunc => sub {}) };
+        return parse_multipath_status($out);
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'get_multipath_config',
+    path        => 'multipath/config',
+    method      => 'GET',
+    description => 'Get current /etc/multipath.conf content.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => { node => get_standard_option('pve-node') },
+    },
+    returns => { type => 'object', properties => { content => { type => 'string' } } },
+    code => sub {
+        my ($param) = @_;
+        my $content = '';
+        if (-f '/etc/multipath.conf') {
+            open my $fh, '<', '/etc/multipath.conf'
+                or die "Cannot read /etc/multipath.conf: $!\n";
+            local $/;
+            $content = <$fh>;
+            close $fh;
+        }
+        return { content => $content };
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'put_multipath_config',
+    path        => 'multipath/config',
+    method      => 'PUT',
+    description => 'Write /etc/multipath.conf and restart multipathd.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => {
+            node    => get_standard_option('pve-node'),
+            content => { type => 'string', description => 'Full multipath.conf content' },
+            merge   => {
+                type        => 'boolean',
+                optional    => 1,
+                default     => 0,
+                description => 'Merge new entries into existing config instead of replacing',
+            },
+        },
+    },
+    returns => { type => 'string', description => 'UPID of the restart task' },
+    code => sub {
+        my ($param) = @_;
+        my $rpcenv   = PVE::RPCEnvironment::get();
+        my $authuser = $rpcenv->get_user();
+        my $content  = $param->{content};
+
+        if ($param->{merge} && -f '/etc/multipath.conf') {
+            open my $fh, '<', '/etc/multipath.conf'
+                or die "Cannot read existing config: $!\n";
+            local $/;
+            my $existing = <$fh>;
+            close $fh;
+            $content = $existing . "\n" . $content;
+        }
+
+        my $final_content = $content;
+        return $rpcenv->fork_worker('mpconfig', undef, $authuser, sub {
+            print "Writing /etc/multipath.conf...\n";
+            open my $fh, '>', '/etc/multipath.conf'
+                or die "Cannot write /etc/multipath.conf: $!\n";
+            print $fh $final_content;
+            close $fh;
+            print "Restarting multipathd...\n";
+            _run_cmd(['systemctl', 'restart', 'multipathd']);
+            print "Done.\n";
+        });
+    },
+});
+
 1;
