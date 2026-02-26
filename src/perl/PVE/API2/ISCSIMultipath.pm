@@ -212,12 +212,17 @@ __PACKAGE__->register_method({
                         errfunc => sub {}) };
         my $mp_devices = parse_multipath_status($mp_out);
 
+        my $fc_hbas   = parse_fc_hbas();
+        my $fc_online = scalar grep { $_->{port_state} eq 'Online' } @$fc_hbas;
+
         return {
             packages              => \%pkgs,
             services              => \%svcs,
             sessions              => $sessions,
             multipath_config_exists => (-f '/etc/multipath.conf') ? 1 : 0,
             multipath_devices     => $mp_devices,
+            fc_hba_count          => scalar @$fc_hbas,
+            fc_hbas_online        => $fc_online,
         };
     },
 });
