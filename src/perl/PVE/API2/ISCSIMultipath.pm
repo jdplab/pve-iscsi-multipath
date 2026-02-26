@@ -63,6 +63,63 @@ sub parse_multipath_status {
     return \@devices;
 }
 
+# Parse FC HBA info from sysfs.
+# $base defaults to /sys/class/fc_host; pass a temp dir in tests.
+sub parse_fc_hbas {
+    my ($base) = @_;
+    $base //= '/sys/class/fc_host';
+    my @hbas;
+    for my $host_path (glob "$base/host*") {
+        my $name = (split m{/}, $host_path)[-1];
+        my %hba = (name => $name);
+        for my $attr (qw(port_name node_name port_state port_type speed symbolic_name)) {
+            if (open my $fh, '<', "$host_path/$attr") {
+                local $/;
+                ($hba{$attr} = <$fh>) =~ s/\s+$//;
+                close $fh;
+            } else {
+                $hba{$attr} = '';
+            }
+        }
+        push @hbas, \%hba;
+    }
+    return \@hbas;
+}
+
+# Parse FC fabric targets from sysfs, filtered to FCP Target role only.
+# $base defaults to /sys/class/fc_remote_ports; pass a temp dir in tests.
+sub parse_fc_targets {
+    my ($base) = @_;
+    $base //= '/sys/class/fc_remote_ports';
+    my @targets;
+    for my $rport_path (glob "$base/rport-*") {
+        my $roles = '';
+        if (open my $fh, '<', "$rport_path/roles") {
+            local $/;
+            ($roles = <$fh>) =~ s/\s+$//;
+            close $fh;
+        }
+        next unless $roles =~ /FCP Target/i;
+
+        my %target;
+        for my $attr (qw(port_name node_name port_state)) {
+            if (open my $fh, '<', "$rport_path/$attr") {
+                local $/;
+                ($target{$attr} = <$fh>) =~ s/\s+$//;
+                close $fh;
+            } else {
+                $target{$attr} = '';
+            }
+        }
+        # Extract host number from rport name: rport-H:B-I → hostH
+        my $rport_name = (split m{/}, $rport_path)[-1];
+        my ($host_num) = ($rport_name =~ /^rport-(\d+):/);
+        $target{hba} = defined $host_num ? "host$host_num" : '';
+        push @targets, \%target;
+    }
+    return \@targets;
+}
+
 # Merge new {wwid, alias} entries into an existing multipath.conf string.
 # Inserts new multipath{} blocks inside the multipaths{} section.
 # If no multipaths{} section exists, appends one.
