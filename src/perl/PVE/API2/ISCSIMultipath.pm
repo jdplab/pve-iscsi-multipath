@@ -413,4 +413,176 @@ __PACKAGE__->register_method({
     },
 });
 
+
+sub session_exists {
+    my ($sessions, $target_iqn, $portal) = @_;
+    for my $s (@$sessions) {
+        return 1 if $s->{target_iqn} eq $target_iqn && $s->{portal} eq $portal;
+    }
+    return 0;
+}
+
+sub lvm_conf_has_lvmlockd {
+    my ($content) = @_;
+    return $content =~ /use_lvmlockd\s*=\s*1/;
+}
+
+__PACKAGE__->register_method({
+    name        => 'setup',
+    path        => 'setup',
+    method      => 'POST',
+    description => 'Run full iSCSI/multipath setup sequence. Idempotent.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => {
+            node             => get_standard_option('pve-node'),
+            portals          => { type => 'string', description => 'Comma-separated portals' },
+            targets          => { type => 'string', description => 'Comma-separated target IQNs' },
+            multipath_config => { type => 'string', description => 'Full multipath.conf content' },
+            merge_multipath  => { type => 'boolean', optional => 1, default => 0 },
+            enable_lvmlockd  => { type => 'boolean', optional => 1, default => 0 },
+            enable_sanlock   => { type => 'boolean', optional => 1, default => 0 },
+        },
+    },
+    returns => { type => 'string', description => 'UPID' },
+    code => sub {
+        my ($param) = @_;
+        my $rpcenv   = PVE::RPCEnvironment::get();
+        my $authuser = $rpcenv->get_user();
+
+        my @portals = map { my $p = $_; $p =~ s/^\s+|\s+$//g; $p =~ /:/ ? $p : "$p:3260" }
+                      split(/,/, $param->{portals});
+        my @targets = map { my $t = $_; $t =~ s/^\s+|\s+$//g; $t }
+                      split(/,/, $param->{targets});
+
+        return $rpcenv->fork_worker('iscsisetup', undef, $authuser, sub {
+            # Step 1: Install missing packages
+            print "Checking packages...\n";
+            my @missing;
+            push @missing, 'open-iscsi'      unless check_package_installed('open-iscsi');
+            push @missing, 'multipath-tools' unless check_package_installed('multipath-tools');
+            push @missing, 'lvm2'            unless check_package_installed('lvm2');
+            push @missing, 'sanlock'         if $param->{enable_sanlock}
+                                             && !check_package_installed('sanlock');
+            if (@missing) {
+                print "Installing: @missing\n";
+                _run_cmd(['apt-get', 'install', '-y', @missing]);
+            } else {
+                print "All packages already installed - skipped.\n";
+            }
+
+            # Step 2: Enable iscsid
+            print "Checking iscsid...\n";
+            if (!check_service_active('iscsid')) {
+                _run_cmd(['systemctl', 'enable', '--now', 'iscsid']);
+                print "iscsid enabled and started.\n";
+            } else {
+                print "iscsid already running - skipped.\n";
+            }
+
+            # Step 3: Discovery + login
+            my $session_out = '';
+            eval { _run_cmd(['iscsiadm', '-m', 'session', '-P', '0'],
+                            outfunc => sub { $session_out .= $_[0] . "\n" },
+                            errfunc => sub {}) };
+            my $existing_sessions = parse_sessions($session_out);
+
+            for my $portal (@portals) {
+                print "Discovering targets on $portal...\n";
+                eval { _run_cmd(['iscsiadm', '-m', 'discovery',
+                                 '-t', 'sendtargets', '-p', $portal],
+                                outfunc => sub { print "  $_[0]\n" },
+                                errfunc => sub {}) };
+            }
+
+            for my $target (@targets) {
+                for my $portal (@portals) {
+                    if (session_exists($existing_sessions, $target, $portal)) {
+                        print "Already connected: $target on $portal - skipped.\n";
+                    } else {
+                        print "Logging in: $target on $portal...\n";
+                        eval { _run_cmd(['iscsiadm', '-m', 'node',
+                                         '-T', $target, '-p', $portal, '--login'],
+                                        outfunc => sub { print "  $_[0]\n" },
+                                        errfunc => sub { print "  $_[0]\n" }) };
+                        warn "  Warning: $@" if $@;
+                    }
+                }
+            }
+
+            # Step 4: Write multipath.conf
+            print "Configuring multipath...\n";
+            my $config = $param->{multipath_config};
+            if ($param->{merge_multipath} && -f '/etc/multipath.conf') {
+                open my $fh, '<', '/etc/multipath.conf'
+                    or die "Cannot read existing multipath.conf: $!\n";
+                local $/;
+                my $existing = <$fh>;
+                close $fh;
+                $config = $existing . "\n" . $config;
+                print "Merged with existing config.\n";
+            }
+            open my $fh, '>', '/etc/multipath.conf'
+                or die "Cannot write /etc/multipath.conf: $!\n";
+            print $fh $config;
+            close $fh;
+            print "multipath.conf written.\n";
+
+            # Step 5: Enable multipathd
+            if (!check_service_active('multipathd')) {
+                _run_cmd(['systemctl', 'enable', '--now', 'multipathd']);
+                print "multipathd enabled and started.\n";
+            } else {
+                _run_cmd(['systemctl', 'restart', 'multipathd']);
+                print "multipathd restarted with new config.\n";
+            }
+
+            # Step 6: lvmlockd/sanlock (optional)
+            if ($param->{enable_lvmlockd}) {
+                print "Configuring lvmlockd...\n";
+                open my $lf, '<', '/etc/lvm/lvm.conf'
+                    or die "Cannot read lvm.conf: $!\n";
+                my $lvm_conf;
+                { local $/; $lvm_conf = <$lf>; }
+                close $lf;
+
+                if (!lvm_conf_has_lvmlockd($lvm_conf)) {
+                    $lvm_conf =~ s/(global\s*\{)/$1\n    use_lvmlockd = 1/;
+                    open my $lf2, '>', '/etc/lvm/lvm.conf'
+                        or die "Cannot write lvm.conf: $!\n";
+                    print $lf2 $lvm_conf;
+                    close $lf2;
+                    print "lvm.conf updated.\n";
+                } else {
+                    print "lvmlockd already in lvm.conf - skipped.\n";
+                }
+                _run_cmd(['systemctl', 'enable', '--now', 'lvmlockd'])
+                    unless check_service_active('lvmlockd');
+            }
+
+            if ($param->{enable_sanlock}) {
+                _run_cmd(['systemctl', 'enable', '--now', 'sanlock'])
+                    unless check_service_active('sanlock');
+            }
+
+            # Step 7: Configure auto-login
+            print "Configuring auto-login...\n";
+            for my $target (@targets) {
+                for my $portal (@portals) {
+                    eval {
+                        _run_cmd(['iscsiadm', '-m', 'node',
+                                  '-T', $target, '-p', $portal,
+                                  '--op', 'update',
+                                  '-n', 'node.startup', '-v', 'automatic'],
+                                 errfunc => sub {});
+                    };
+                }
+            }
+
+            print "Setup complete.\n";
+        });
+    },
+});
+
 1;
