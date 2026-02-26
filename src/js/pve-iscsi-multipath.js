@@ -296,8 +296,107 @@ Ext.define('PVE.node.MultipathPanel', {
     },
 });
 
+Ext.define('PVE.node.FCPanel', {
+    extend: 'Ext.panel.Panel',
+    xtype: 'pveNodeFCPanel',
+
+    layout: {
+        type: 'hbox',
+        align: 'stretch',
+    },
+
+    initComponent: function () {
+        var me = this;
+        var nodename = me.pveSelNode.data.node;
+        if (!nodename) throw 'no node name specified';
+
+        var hbasStore = Ext.create('Ext.data.Store', {
+            fields: ['name', 'port_name', 'node_name', 'port_state', 'speed', 'symbolic_name'],
+            proxy: {
+                type: 'proxmox',
+                url: '/api2/json/nodes/' + nodename + '/iscsi/fc/hbas',
+            },
+        });
+
+        var targetsStore = Ext.create('Ext.data.Store', {
+            fields: ['port_name', 'node_name', 'hba', 'port_state'],
+            proxy: {
+                type: 'proxmox',
+                url: '/api2/json/nodes/' + nodename + '/iscsi/fc/targets',
+            },
+        });
+
+        var reload = function () {
+            hbasStore.load();
+            targetsStore.load();
+        };
+
+        var rescan = function () {
+            Proxmox.Utils.API2Request({
+                url: '/nodes/' + nodename + '/iscsi/fc/rescan',
+                method: 'POST',
+                waitMsgTarget: me,
+                success: function () {
+                    Ext.defer(reload, 2000);
+                },
+                failure: function (r) {
+                    Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+                },
+            });
+        };
+
+        var stateRenderer = function (v) {
+            var color = (v === 'Online') ? '#2c9142' : '#cc2a2a';
+            return '<span style="color:' + color + '">' + Ext.String.htmlEncode(v || '') + '</span>';
+        };
+
+        Ext.apply(me, {
+            items: [
+                {
+                    xtype: 'grid',
+                    title: gettext('Local HBAs'),
+                    flex: 1,
+                    store: hbasStore,
+                    columns: [
+                        { text: gettext('HBA'),   dataIndex: 'name',      width: 70 },
+                        { text: 'WWPN',           dataIndex: 'port_name', flex: 2 },
+                        { text: gettext('Speed'),  dataIndex: 'speed',     width: 80 },
+                        { text: gettext('State'),  dataIndex: 'port_state', width: 80, renderer: stateRenderer },
+                    ],
+                    tbar: [
+                        {
+                            text: gettext('Reload'),
+                            iconCls: 'fa fa-refresh',
+                            handler: reload,
+                        },
+                        {
+                            text: gettext('Rescan Fabric'),
+                            iconCls: 'fa fa-search',
+                            handler: rescan,
+                        },
+                    ],
+                },
+                {
+                    xtype: 'grid',
+                    title: gettext('Connected FC Targets'),
+                    flex: 2,
+                    store: targetsStore,
+                    columns: [
+                        { text: 'Remote WWPN',    dataIndex: 'port_name', flex: 2 },
+                        { text: gettext('Via HBA'), dataIndex: 'hba',     width: 70 },
+                        { text: gettext('State'),  dataIndex: 'port_state', width: 80, renderer: stateRenderer },
+                    ],
+                },
+            ],
+        });
+
+        me.callParent();
+        reload();
+    },
+});
+
 Ext.define('PVE.dc.ISCSISetupWizard', {
-    extend: 'Proxmox.window.Wizard',
+    extend: 'PVE.window.Wizard',
     xtype: 'pveDCISCSISetupWizard',
 
     title: gettext('SAN Setup Wizard'),
@@ -629,113 +728,8 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
             ],
         });
 
-        // Step 3 -> 4 transition: login newly selected targets, then fetch WWIDs
-        me.on('beforenextcard', function (wizard, current) {
-            if (current.itemId === 'step3') {
-                var nodes = [];
-                nodeStatusStore.each(function (r) {
-                    if (r.get('checked')) nodes.push(r.get('node'));
-                });
-                if (!nodes.length) {
-                    Ext.Msg.alert(gettext('Error'), gettext('Select at least one node.'));
-                    return false;
-                }
-
-                var selectedTargets = [];
-                targetsStore.each(function (r) {
-                    if (r.get('selected') && !r.get('already_connected')) {
-                        selectedTargets.push(r.get('target_iqn'));
-                    }
-                });
-                var portals = portalsStore.collect('portal');
-                var firstNode = nodes[0];
-                var loginPromises = [];
-
-                selectedTargets.forEach(function (iqn) {
-                    portals.forEach(function (portal) {
-                        var p = new Promise(function (resolve) {
-                            Proxmox.Utils.API2Request({
-                                url: '/nodes/' + firstNode + '/iscsi/login',
-                                method: 'POST',
-                                params: { target_iqn: iqn, portal: portal },
-                                success: function (r) {
-                                    if (!r.result.data.already_connected) {
-                                        me._wizardLogins.push({ node: firstNode, iqn: iqn, portal: portal });
-                                    }
-                                    resolve();
-                                },
-                                failure: resolve,
-                            });
-                        });
-                        loginPromises.push(p);
-                    });
-                });
-
-                Promise.all(loginPromises).then(function () {
-                    Proxmox.Utils.API2Request({
-                        url: '/api2/json/nodes/' + firstNode + '/iscsi/status',
-                        method: 'GET',
-                        success: function (response) {
-                            var d = response.result.data;
-                            var existingWwids = (d.multipath_devices || []).map(m => m.wwid);
-                            var wwidsGrid = me.down('#wwidsGrid');
-                            var store = wwidsGrid.getStore();
-                            store.removeAll();
-
-                            (d.multipath_devices || []).forEach(function (dev) {
-                                store.add({ wwid: dev.wwid, alias: dev.alias, is_new: false });
-                            });
-
-                            Proxmox.Utils.API2Request({
-                                url: '/api2/json/nodes/' + firstNode + '/iscsi/multipath/status',
-                                method: 'GET',
-                                success: function (r2) {
-                                    (r2.result.data || []).forEach(function (dev) {
-                                        if (!existingWwids.includes(dev.wwid)) {
-                                            store.add({ wwid: dev.wwid, alias: dev.alias || '', is_new: true });
-                                        }
-                                    });
-                                    wizard.navigateToNextCard();
-                                },
-                            });
-                        },
-                    });
-                });
-
-                return false; // prevent automatic navigation
-            }
-
-            // Step 4 -> 5: pre-populate service checkboxes from cluster size
-            if (current.itemId === 'step4') {
-                Proxmox.Utils.API2Request({
-                    url: '/api2/json/cluster/status',
-                    method: 'GET',
-                    success: function (r) {
-                        var nodeCount = (r.result.data || []).filter(n => n.type === 'node').length;
-                        var isCluster = nodeCount > 1;
-                        me.down('#chkLvmlockd').setValue(isCluster);
-                        me.down('#chkSanlock').setValue(isCluster);
-                    },
-                });
-            }
-        });
-
-        // Back from Step 4: roll back logins this wizard performed
-        me.on('beforeprevcard', function (wizard, current) {
-            if (current.itemId === 'step4') {
-                me._wizardLogins.forEach(function (login) {
-                    Proxmox.Utils.API2Request({
-                        url: '/nodes/' + login.node + '/iscsi/logout',
-                        method: 'POST',
-                        params: { target_iqn: login.iqn, portal: login.portal },
-                    });
-                });
-                me._wizardLogins = [];
-            }
-        });
-
-        // Apply step: run setup on each node sequentially
-        me.on('beforefinish', function () {
+        // Apply step: run setup on each node sequentially (called when entering step6)
+        var startApply = function () {
             var nodes = [];
             nodeStatusStore.each(function (r) { if (r.get('checked')) nodes.push(r.get('node')); });
 
@@ -832,10 +826,134 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
             };
 
             runNextNode(0);
-            return false; // Keep wizard open so user sees progress
-        });
+        };
 
         me.callParent();
+
+        // PVE.window.Wizard uses a #wizcontent tabpanel with no custom events.
+        // Hook beforetabchange to handle async transitions and apply triggering.
+        var tp = me.down('#wizcontent');
+        if (tp) {
+            var _skipNextTabChange = false;
+
+            tp.on('beforetabchange', function (panel, newTab, oldTab) {
+                if (_skipNextTabChange) {
+                    _skipNextTabChange = false;
+                    return true;
+                }
+
+                var allTabs = panel.items.items;
+                var oldIdx = allTabs.indexOf(oldTab);
+                var newIdx = allTabs.indexOf(newTab);
+                var goingForward = newIdx > oldIdx;
+
+                // step3 → step4 (forward): login selected targets then navigate
+                if (goingForward && oldTab.itemId === 'step3') {
+                    var nodes = [];
+                    nodeStatusStore.each(function (r) {
+                        if (r.get('checked')) nodes.push(r.get('node'));
+                    });
+                    if (!nodes.length) {
+                        Ext.Msg.alert(gettext('Error'), gettext('Select at least one node.'));
+                        return false;
+                    }
+
+                    var selectedTargets = [];
+                    targetsStore.each(function (r) {
+                        if (r.get('selected') && !r.get('already_connected')) {
+                            selectedTargets.push(r.get('target_iqn'));
+                        }
+                    });
+                    var portals = portalsStore.collect('portal');
+                    var firstNode = nodes[0];
+                    var loginPromises = [];
+
+                    selectedTargets.forEach(function (iqn) {
+                        portals.forEach(function (portal) {
+                            var p = new Promise(function (resolve) {
+                                Proxmox.Utils.API2Request({
+                                    url: '/nodes/' + firstNode + '/iscsi/login',
+                                    method: 'POST',
+                                    params: { target_iqn: iqn, portal: portal },
+                                    success: function (r) {
+                                        if (!r.result.data.already_connected) {
+                                            me._wizardLogins.push({ node: firstNode, iqn: iqn, portal: portal });
+                                        }
+                                        resolve();
+                                    },
+                                    failure: resolve,
+                                });
+                            });
+                            loginPromises.push(p);
+                        });
+                    });
+
+                    Promise.all(loginPromises).then(function () {
+                        Proxmox.Utils.API2Request({
+                            url: '/api2/json/nodes/' + firstNode + '/iscsi/status',
+                            method: 'GET',
+                            success: function (response) {
+                                var d = response.result.data;
+                                var existingWwids = (d.multipath_devices || []).map(m => m.wwid);
+                                var store = me.down('#wwidsGrid').getStore();
+                                store.removeAll();
+
+                                (d.multipath_devices || []).forEach(function (dev) {
+                                    store.add({ wwid: dev.wwid, alias: dev.alias, is_new: false });
+                                });
+
+                                Proxmox.Utils.API2Request({
+                                    url: '/api2/json/nodes/' + firstNode + '/iscsi/multipath/status',
+                                    method: 'GET',
+                                    success: function (r2) {
+                                        (r2.result.data || []).forEach(function (dev) {
+                                            if (!existingWwids.includes(dev.wwid)) {
+                                                store.add({ wwid: dev.wwid, alias: dev.alias || '', is_new: true });
+                                            }
+                                        });
+                                        _skipNextTabChange = true;
+                                        panel.setActiveTab(newTab);
+                                    },
+                                });
+                            },
+                        });
+                    });
+
+                    return false;
+                }
+
+                // step4 → step3 (back): roll back logins this wizard performed
+                if (!goingForward && oldTab.itemId === 'step4') {
+                    me._wizardLogins.forEach(function (login) {
+                        Proxmox.Utils.API2Request({
+                            url: '/nodes/' + login.node + '/iscsi/logout',
+                            method: 'POST',
+                            params: { target_iqn: login.iqn, portal: login.portal },
+                        });
+                    });
+                    me._wizardLogins = [];
+                }
+
+                // step4 → step5 (forward): pre-populate service checkboxes from cluster size
+                if (goingForward && oldTab.itemId === 'step4') {
+                    Proxmox.Utils.API2Request({
+                        url: '/api2/json/cluster/status',
+                        method: 'GET',
+                        success: function (r) {
+                            var nodeCount = (r.result.data || []).filter(n => n.type === 'node').length;
+                            var isCluster = nodeCount > 1;
+                            me.down('#chkLvmlockd').setValue(isCluster);
+                            me.down('#chkSanlock').setValue(isCluster);
+                        },
+                    });
+                }
+
+                // step5 → step6 (forward): start apply process
+                if (goingForward && oldTab.itemId === 'step5') {
+                    startApply();
+                }
+            });
+        }
     },
 });
 
@@ -859,35 +977,48 @@ Ext.define(null, {
     },
 });
 
-// Inject iSCSI and Multipath tabs into the node Config panel (storage group)
+// Inject iSCSI and Multipath tabs into the node Config panel (storage group).
+// Must override PVE.panel.Config (not PVE.node.Config) so we can push into
+// me.items before PVE.panel.Config.initComponent builds the navigation tree.
 Ext.define(null, {
-    override: 'PVE.node.Config',
+    override: 'PVE.panel.Config',
 
     initComponent: function () {
-        this.callParent(arguments);
-
         var me = this;
-        var caps = Ext.state.Manager.get('GuiCap');
 
-        if (caps.nodes['Sys.Audit']) {
-            me.add([
-                {
-                    xtype: 'pveNodeISCSIPanel',
-                    title: 'iSCSI',
-                    itemId: 'iscsi',
-                    iconCls: 'fa fa-plug',
-                    groups: ['storage'],
-                    pveSelNode: me.pveSelNode,
-                },
-                {
-                    xtype: 'pveNodeMultipathPanel',
-                    title: 'Multipath',
-                    itemId: 'multipath',
-                    iconCls: 'fa fa-sitemap',
-                    groups: ['storage'],
-                    pveSelNode: me.pveSelNode,
-                },
-            ]);
+        if (me.$className === 'PVE.node.Config') {
+            var caps = Ext.state.Manager.get('GuiCap');
+            if (caps && caps.nodes && caps.nodes['Sys.Audit']) {
+                if (!Ext.isArray(me.items)) me.items = [];
+                me.items.push(
+                    {
+                        xtype: 'pveNodeISCSIPanel',
+                        title: 'iSCSI',
+                        itemId: 'iscsi',
+                        iconCls: 'fa fa-plug',
+                        groups: ['storage'],
+                        pveSelNode: me.pveSelNode,
+                    },
+                    {
+                        xtype: 'pveNodeMultipathPanel',
+                        title: 'Multipath',
+                        itemId: 'multipath',
+                        iconCls: 'fa fa-sitemap',
+                        groups: ['storage'],
+                        pveSelNode: me.pveSelNode,
+                    },
+                    {
+                        xtype: 'pveNodeFCPanel',
+                        title: 'Fibre Channel',
+                        itemId: 'fc',
+                        iconCls: 'fa fa-circle-o',
+                        groups: ['storage'],
+                        pveSelNode: me.pveSelNode,
+                    }
+                );
+            }
         }
+
+        this.callParent(arguments);
     },
 });
