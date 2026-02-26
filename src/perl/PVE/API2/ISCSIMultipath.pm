@@ -376,6 +376,63 @@ __PACKAGE__->register_method({
 });
 
 __PACKAGE__->register_method({
+    name        => 'fc_hbas',
+    path        => 'fc/hbas',
+    method      => 'GET',
+    description => 'List local Fibre Channel HBAs from sysfs.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => { node => get_standard_option('pve-node') },
+    },
+    returns => { type => 'array', items => { type => 'object' } },
+    code => sub {
+        my ($param) = @_;
+        return parse_fc_hbas();
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'fc_targets',
+    path        => 'fc/targets',
+    method      => 'GET',
+    description => 'List FC fabric targets visible through local HBAs.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => { node => get_standard_option('pve-node') },
+    },
+    returns => { type => 'array', items => { type => 'object' } },
+    code => sub {
+        my ($param) = @_;
+        return parse_fc_targets();
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'fc_rescan',
+    path        => 'fc/rescan',
+    method      => 'POST',
+    description => 'Trigger LIP (fabric re-enumeration) on all local FC HBAs.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => { node => get_standard_option('pve-node') },
+    },
+    returns => { type => 'null' },
+    code => sub {
+        my ($param) = @_;
+        for my $host_path (glob '/sys/class/fc_host/host*') {
+            if (open my $fh, '>', "$host_path/issue_lip") {
+                print $fh "1";
+                close $fh;
+            }
+        }
+        return undef;
+    },
+});
+
+__PACKAGE__->register_method({
     name        => 'multipath_status',
     path        => 'multipath/status',
     method      => 'GET',
