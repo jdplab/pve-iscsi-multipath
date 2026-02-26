@@ -295,3 +295,36 @@ Ext.define('PVE.node.MultipathPanel', {
         reload();
     },
 });
+
+// Inject iSCSI and Multipath tabs into the node Config panel (storage group)
+Ext.define(null, {
+    override: 'PVE.node.Config',
+
+    initComponent: function () {
+        this.callParent(arguments);
+
+        var me = this;
+        var caps = Ext.state.Manager.get('GuiCap');
+
+        if (caps.nodes['Sys.Audit']) {
+            me.add([
+                {
+                    xtype: 'pveNodeISCSIPanel',
+                    title: 'iSCSI',
+                    itemId: 'iscsi',
+                    iconCls: 'fa fa-plug',
+                    groups: ['storage'],
+                    pveSelNode: me.pveSelNode,
+                },
+                {
+                    xtype: 'pveNodeMultipathPanel',
+                    title: 'Multipath',
+                    itemId: 'multipath',
+                    iconCls: 'fa fa-sitemap',
+                    groups: ['storage'],
+                    pveSelNode: me.pveSelNode,
+                },
+            ]);
+        }
+    },
+});
