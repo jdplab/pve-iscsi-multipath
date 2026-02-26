@@ -574,11 +574,288 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                     ],
                 },
 
-                // Steps 5 & 6 added in Task 11
+                // --- Step 5: Services ---
+                {
+                    title: gettext('Services'),
+                    xtype: 'panel',
+                    itemId: 'step5',
+                    bodyPadding: 10,
+                    items: [
+                        {
+                            xtype: 'proxmoxcheckbox',
+                            name: 'enable_iscsid',
+                            boxLabel: gettext('Enable iscsid'),
+                            itemId: 'chkIscsid',
+                            value: true,
+                        },
+                        {
+                            xtype: 'proxmoxcheckbox',
+                            name: 'enable_multipathd',
+                            boxLabel: gettext('Enable multipathd'),
+                            itemId: 'chkMultipathd',
+                            value: true,
+                        },
+                        {
+                            xtype: 'proxmoxcheckbox',
+                            name: 'enable_lvmlockd',
+                            boxLabel: gettext('Enable lvmlockd (recommended for clusters)'),
+                            itemId: 'chkLvmlockd',
+                            value: false,
+                        },
+                        {
+                            xtype: 'proxmoxcheckbox',
+                            name: 'enable_sanlock',
+                            boxLabel: gettext('Enable sanlock (required with lvmlockd)'),
+                            itemId: 'chkSanlock',
+                            value: false,
+                        },
+                    ],
+                },
+
+                // --- Step 6: Apply ---
+                {
+                    title: gettext('Apply'),
+                    xtype: 'panel',
+                    itemId: 'step6',
+                    layout: 'fit',
+                    items: [{
+                        xtype: 'container',
+                        itemId: 'progressContainer',
+                        layout: { type: 'vbox', align: 'stretch' },
+                        scrollable: true,
+                        items: [],
+                    }],
+                },
             ],
         });
 
+        // Step 3 -> 4 transition: login newly selected targets, then fetch WWIDs
+        me.on('beforenextcard', function (wizard, current) {
+            if (current.itemId === 'step3') {
+                var nodes = [];
+                nodeStatusStore.each(function (r) {
+                    if (r.get('checked')) nodes.push(r.get('node'));
+                });
+                if (!nodes.length) {
+                    Ext.Msg.alert(gettext('Error'), gettext('Select at least one node.'));
+                    return false;
+                }
+
+                var selectedTargets = [];
+                targetsStore.each(function (r) {
+                    if (r.get('selected') && !r.get('already_connected')) {
+                        selectedTargets.push(r.get('target_iqn'));
+                    }
+                });
+                var portals = portalsStore.collect('portal');
+                var firstNode = nodes[0];
+                var loginPromises = [];
+
+                selectedTargets.forEach(function (iqn) {
+                    portals.forEach(function (portal) {
+                        var p = new Promise(function (resolve) {
+                            Proxmox.Utils.API2Request({
+                                url: '/nodes/' + firstNode + '/iscsi/login',
+                                method: 'POST',
+                                params: { target_iqn: iqn, portal: portal },
+                                success: function (r) {
+                                    if (!r.result.data.already_connected) {
+                                        me._wizardLogins.push({ node: firstNode, iqn: iqn, portal: portal });
+                                    }
+                                    resolve();
+                                },
+                                failure: resolve,
+                            });
+                        });
+                        loginPromises.push(p);
+                    });
+                });
+
+                Promise.all(loginPromises).then(function () {
+                    Proxmox.Utils.API2Request({
+                        url: '/api2/json/nodes/' + firstNode + '/iscsi/status',
+                        method: 'GET',
+                        success: function (response) {
+                            var d = response.result.data;
+                            var existingWwids = (d.multipath_devices || []).map(m => m.wwid);
+                            var wwidsGrid = me.down('#wwidsGrid');
+                            var store = wwidsGrid.getStore();
+                            store.removeAll();
+
+                            (d.multipath_devices || []).forEach(function (dev) {
+                                store.add({ wwid: dev.wwid, alias: dev.alias, is_new: false });
+                            });
+
+                            Proxmox.Utils.API2Request({
+                                url: '/api2/json/nodes/' + firstNode + '/iscsi/multipath/status',
+                                method: 'GET',
+                                success: function (r2) {
+                                    (r2.result.data || []).forEach(function (dev) {
+                                        if (!existingWwids.includes(dev.wwid)) {
+                                            store.add({ wwid: dev.wwid, alias: dev.alias || '', is_new: true });
+                                        }
+                                    });
+                                    wizard.navigateToNextCard();
+                                },
+                            });
+                        },
+                    });
+                });
+
+                return false; // prevent automatic navigation
+            }
+
+            // Step 4 -> 5: pre-populate service checkboxes from cluster size
+            if (current.itemId === 'step4') {
+                Proxmox.Utils.API2Request({
+                    url: '/api2/json/cluster/status',
+                    method: 'GET',
+                    success: function (r) {
+                        var nodeCount = (r.result.data || []).filter(n => n.type === 'node').length;
+                        var isCluster = nodeCount > 1;
+                        me.down('#chkLvmlockd').setValue(isCluster);
+                        me.down('#chkSanlock').setValue(isCluster);
+                    },
+                });
+            }
+        });
+
+        // Back from Step 4: roll back logins this wizard performed
+        me.on('beforeprevcard', function (wizard, current) {
+            if (current.itemId === 'step4') {
+                me._wizardLogins.forEach(function (login) {
+                    Proxmox.Utils.API2Request({
+                        url: '/nodes/' + login.node + '/iscsi/logout',
+                        method: 'POST',
+                        params: { target_iqn: login.iqn, portal: login.portal },
+                    });
+                });
+                me._wizardLogins = [];
+            }
+        });
+
+        // Apply step: run setup on each node sequentially
+        me.on('beforefinish', function () {
+            var nodes = [];
+            nodeStatusStore.each(function (r) { if (r.get('checked')) nodes.push(r.get('node')); });
+
+            var targets = [];
+            targetsStore.each(function (r) { if (r.get('selected')) targets.push(r.get('target_iqn')); });
+
+            var portals = portalsStore.collect('portal').join(',');
+
+            var wwidsGrid = me.down('#wwidsGrid');
+            var mpConfig = 'defaults {\n    user_friendly_names yes\n    find_multipaths yes\n}\n\n';
+            mpConfig += 'blacklist {\n    devnode "^sda"\n}\n\n';
+            mpConfig += 'multipaths {\n';
+            wwidsGrid.getStore().each(function (r) {
+                if (r.get('is_new')) {
+                    mpConfig += '    multipath {\n';
+                    mpConfig += '        wwid ' + r.get('wwid') + '\n';
+                    mpConfig += '        alias ' + r.get('alias') + '\n';
+                    mpConfig += '    }\n';
+                }
+            });
+            mpConfig += '}\n';
+
+            var enableLvmlockd = me.down('#chkLvmlockd').getValue();
+            var enableSanlock  = me.down('#chkSanlock').getValue();
+
+            var container = me.down('#progressContainer');
+            container.removeAll();
+
+            var runNextNode = function (idx) {
+                if (idx >= nodes.length) {
+                    container.add({
+                        xtype: 'displayfield',
+                        value: '<b>' + gettext('All nodes complete.') + '</b>',
+                        margin: '10 0 0 0',
+                    });
+                    return;
+                }
+                var node = nodes[idx];
+                var section = Ext.create('Ext.panel.Panel', {
+                    title: node,
+                    collapsible: true,
+                    bodyPadding: 5,
+                    items: [{
+                        xtype: 'textarea',
+                        readOnly: true,
+                        height: 150,
+                        fieldStyle: 'font-family: monospace; font-size: 11px;',
+                        itemId: 'log-' + node,
+                    }],
+                });
+                container.add(section);
+
+                Proxmox.Utils.API2Request({
+                    url: '/nodes/' + node + '/iscsi/setup',
+                    method: 'POST',
+                    params: {
+                        portals:          portals,
+                        targets:          targets.join(','),
+                        multipath_config: mpConfig,
+                        merge_multipath:  0,
+                        enable_lvmlockd:  enableLvmlockd ? 1 : 0,
+                        enable_sanlock:   enableSanlock  ? 1 : 0,
+                    },
+                    success: function (response) {
+                        var upid = response.result.data;
+                        var logArea = section.down('#log-' + node);
+                        var poll = setInterval(function () {
+                            Proxmox.Utils.API2Request({
+                                url: '/api2/json/nodes/' + node + '/tasks/' + encodeURIComponent(upid) + '/log',
+                                method: 'GET',
+                                params: { start: 0, limit: 500 },
+                                success: function (r) {
+                                    var lines = (r.result.data || []).map(l => l.t).join('\n');
+                                    logArea.setValue(lines);
+                                },
+                            });
+                            Proxmox.Utils.API2Request({
+                                url: '/api2/json/nodes/' + node + '/tasks/' + encodeURIComponent(upid) + '/status',
+                                method: 'GET',
+                                success: function (r) {
+                                    if (r.result.data.status === 'stopped') {
+                                        clearInterval(poll);
+                                        runNextNode(idx + 1);
+                                    }
+                                },
+                            });
+                        }, 2000);
+                    },
+                    failure: function (r) {
+                        section.down('#log-' + node).setValue('ERROR: ' + r.htmlStatus);
+                        runNextNode(idx + 1);
+                    },
+                });
+            };
+
+            runNextNode(0);
+            return false; // Keep wizard open so user sees progress
+        });
+
         me.callParent();
+    },
+});
+
+// Inject "SAN Setup" button into the Datacenter > Storage panel toolbar
+// xtype confirmed: PVE.dc.StorageView (alias: pveStorageView)
+Ext.define(null, {
+    override: 'PVE.dc.StorageView',
+
+    initComponent: function () {
+        this.callParent(arguments);
+        var toolbar = this.down('toolbar[dock=top]');
+        if (toolbar) {
+            toolbar.add({
+                text: gettext('SAN Setup'),
+                iconCls: 'fa fa-plug',
+                handler: function () {
+                    Ext.create('PVE.dc.ISCSISetupWizard', { autoShow: true });
+                },
+            });
+        }
     },
 });
 
