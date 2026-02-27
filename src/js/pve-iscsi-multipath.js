@@ -2,6 +2,121 @@
 // Datacenter storage panel xtype: PVE.dc.StorageView (alias: pveStorageView)
 // Nodeinfo class: PVE::API2::Nodes::Nodeinfo starts at line 1 of Nodes.pm
 
+Ext.define('PVE.node.ConfigureMultipathDialog', {
+    extend: 'Ext.window.Window',
+    xtype: 'pveConfigureMultipathDialog',
+
+    title: gettext('Configure Multipath'),
+    width: 450,
+    modal: true,
+    resizable: false,
+    bodyPadding: 10,
+
+    // Set by caller: nodename required; plus target_iqn+portal OR fc_wwpn
+    nodename: null,
+    target_iqn: null,
+    portal: null,
+    fc_wwpn: null,
+
+    initComponent: function () {
+        var me = this;
+
+        var wwid = '';
+
+        var wwid_display = Ext.create('Ext.form.field.Display', {
+            fieldLabel: 'WWID',
+            value: '',
+        });
+
+        var alias_field = Ext.create('Ext.form.field.Text', {
+            fieldLabel: gettext('Alias'),
+            allowBlank: false,
+            validateOnBlur: false,
+        });
+
+        Ext.apply(me, {
+            items: [wwid_display, alias_field],
+            buttons: [
+                {
+                    text: gettext('Configure'),
+                    itemId: 'configureBtn',
+                    disabled: true,
+                    handler: function () {
+                        var alias = alias_field.getValue().trim();
+                        if (!alias) {
+                            alias_field.markInvalid(gettext('Alias is required'));
+                            return;
+                        }
+                        Proxmox.Utils.API2Request({
+                            url: '/nodes/' + me.nodename + '/iscsi/multipath/add-device',
+                            method: 'POST',
+                            params: { wwid: wwid, alias: alias },
+                            waitMsgTarget: me,
+                            success: function () {
+                                me.fireEvent('configured');
+                                me.close();
+                            },
+                            failure: function (r) {
+                                Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+                            },
+                        });
+                    },
+                },
+                {
+                    text: gettext('Cancel'),
+                    handler: function () { me.close(); },
+                },
+            ],
+        });
+
+        me.callParent();
+
+        // Discover WWID immediately on open
+        me.setLoading(gettext('Detecting WWID\u2026'));
+
+        var params = me.fc_wwpn
+            ? { fc_wwpn: me.fc_wwpn }
+            : { target_iqn: me.target_iqn, portal: me.portal };
+
+        Proxmox.Utils.API2Request({
+            url: '/api2/json/nodes/' + me.nodename + '/iscsi/multipath/wwid',
+            method: 'GET',
+            params: params,
+            success: function (response) {
+                me.setLoading(false);
+                var d = response.result.data;
+
+                if (!d.wwid) {
+                    me.close();
+                    Ext.Msg.alert(gettext('No Device Found'),
+                        gettext('No multipath device detected for this target. ' +
+                                'Ensure multipathd is running and the device is visible.'));
+                    return;
+                }
+                if (d.already_configured) {
+                    me.close();
+                    Ext.Msg.alert(gettext('Already Configured'),
+                        Ext.String.format(
+                            gettext("WWID {0} is already configured as '{1}'."),
+                            d.wwid,
+                            d.existing_alias || '(unknown)'));
+                    return;
+                }
+
+                wwid = d.wwid;
+                wwid_display.setValue(d.wwid);
+                me.down('#configureBtn').enable();
+                alias_field.focus();
+            },
+            failure: function (r) {
+                me.setLoading(false);
+                me.close();
+                Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+            },
+        });
+    },
+});
+
 Ext.define('PVE.node.ISCSIPanel', {
     extend: 'Ext.panel.Panel',
     xtype: 'pveNodeISCSIPanel',
@@ -27,6 +142,15 @@ Ext.define('PVE.node.ISCSIPanel', {
                 type: 'proxmox',
                 url: '/api2/json/nodes/' + nodename + '/iscsi/sessions',
             },
+        });
+
+        sessionsStore.on('load', function (store, records) {
+            records.forEach(function (record) {
+                var portal = record.get('portal');
+                if (!portalsStore.findRecord('portal', portal, 0, false, false, true)) {
+                    portalsStore.add({ portal: portal });
+                }
+            });
         });
 
         var reloadSessions = function () {
