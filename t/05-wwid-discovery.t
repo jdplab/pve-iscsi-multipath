@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 13;
+use Test::More tests => 14;
 use File::Temp qw(tempdir);
 use File::Path qw(make_path);
 
@@ -86,6 +86,14 @@ is(PVE::API2::ISCSIMultipath::_parse_session_host(
        'iqn.2005-10.org.freenas.ctl:proxmox-bruce',
        '192.168.122.15:3260,1'),
    3, '_parse_session_host: strips ,tpgt from caller-supplied portal arg');
+
+# Output-side ,tpgt stripping: iscsiadm output has ,tpgt, caller does not
+# (The $session_p3 fixture has "Current Portal: 192.168.122.15:3260,1" — caller passes without ,1)
+is(PVE::API2::ISCSIMultipath::_parse_session_host(
+       $session_p3,
+       'iqn.2005-10.org.freenas.ctl:proxmox-mgmt',
+       '192.168.122.15'),
+   5, '_parse_session_host: strips ,tpgt from iscsiadm output and auto-appends :3260');
 
 # --- _fc_host_for_wwpn ---
 my $rp_base = tempdir(CLEANUP => 1);

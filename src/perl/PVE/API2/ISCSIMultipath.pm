@@ -726,7 +726,8 @@ __PACKAGE__->register_method({
         properties => {
             node  => get_standard_option('pve-node'),
             wwid  => { type => 'string', description => 'Multipath device WWID' },
-            alias => { type => 'string', description => 'Human-readable alias name' },
+            alias => { type => 'string', description => 'Human-readable alias name',
+                       pattern => '\S+', maxLength => 63 },
         },
     },
     returns => { type => 'null' },
@@ -755,6 +756,7 @@ __PACKAGE__->register_method({
 
         eval { _run_cmd(['multipathd', 'reconfigure'],
                         outfunc => sub {}, errfunc => sub {}) };
+        warn "multipathd reconfigure failed: $@\n" if $@;
 
         return undef;
     },

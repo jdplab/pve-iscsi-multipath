@@ -32,6 +32,8 @@ Ext.define('PVE.node.ConfigureMultipathDialog', {
             fieldLabel: gettext('Alias'),
             allowBlank: false,
             validateOnBlur: false,
+            regex: /^\S+$/,
+            regexText: gettext('Alias must not contain spaces'),
         });
 
         Ext.apply(me, {
@@ -515,6 +517,7 @@ Ext.define('PVE.node.FCPanel', {
                         Ext.create('PVE.node.ConfigureMultipathDialog', {
                             nodename: nodename,
                             fc_wwpn: sel[0].get('port_name'),
+                            listeners: { configured: reload },
                         }).show();
                     },
                 },
