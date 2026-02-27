@@ -313,7 +313,27 @@ Ext.define('PVE.node.ISCSIPanel', {
                         });
                     },
                 },
+                {
+                    text: gettext('Configure Multipath'),
+                    iconCls: 'fa fa-link',
+                    itemId: 'iscsiConfigMpBtn',
+                    disabled: true,
+                    handler: function () {
+                        var sel = sessionsGrid.getSelection();
+                        if (!sel.length) return;
+                        Ext.create('PVE.node.ConfigureMultipathDialog', {
+                            nodename: nodename,
+                            target_iqn: sel[0].get('target_iqn'),
+                            portal: sel[0].get('portal'),
+                        }).show();
+                    },
+                },
             ],
+            listeners: {
+                selectionchange: function (sm, selected) {
+                    sessionsGrid.down('#iscsiConfigMpBtn').setDisabled(!selected.length);
+                },
+            },
         });
 
         Ext.apply(me, {
