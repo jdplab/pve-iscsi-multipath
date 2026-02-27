@@ -470,6 +470,9 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                             status = 'red';
                             detail = gettext('Not configured');
                         }
+                        if (d.fc_hba_count > 0) {
+                            detail += ' \u00b7 FC: ' + d.fc_hbas_online + '/' + d.fc_hba_count + ' HBAs online';
+                        }
                         rec.set('status', status);
                         rec.set('detail', detail);
                         rec.set('_statusData', d);
@@ -503,7 +506,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
 
         // Step 3: Targets
         var targetsStore = Ext.create('Ext.data.Store', {
-            fields: ['target_iqn', 'portal', 'selected', 'already_connected'],
+            fields: ['target_iqn', 'portal', 'selected', 'already_connected', 'transport'],
             data: [],
         });
 
@@ -531,40 +534,48 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
 
                 // --- Step 2 ---
                 {
-                    title: gettext('Portals'),
+                    title: gettext('iSCSI Portals'),
                     xtype: 'panel',
                     itemId: 'step2',
-                    layout: 'fit',
-                    items: [{
-                        xtype: 'grid',
-                        itemId: 'portalsGrid',
-                        store: portalsStore,
-                        columns: [{ text: gettext('Portal IP:port'), dataIndex: 'portal', flex: 1 }],
-                        tbar: [
-                            {
-                                text: gettext('Add'),
-                                iconCls: 'fa fa-plus',
-                                handler: function () {
-                                    Ext.Msg.prompt(gettext('Add Portal'), gettext('Portal IP:'),
-                                        function (btn, val) {
-                                            if (btn !== 'ok' || !val) return;
-                                            var p = val.trim();
-                                            if (!p.match(/:/)) p += ':3260';
-                                            portalsStore.add({ portal: p });
-                                        });
+                    layout: { type: 'vbox', align: 'stretch' },
+                    items: [
+                        {
+                            xtype: 'displayfield',
+                            value: gettext('Leave empty on FC-only hosts \u2014 FC targets are detected automatically.'),
+                            margin: '5 5 0 5',
+                        },
+                        {
+                            xtype: 'grid',
+                            itemId: 'portalsGrid',
+                            flex: 1,
+                            store: portalsStore,
+                            columns: [{ text: gettext('Portal IP:port'), dataIndex: 'portal', flex: 1 }],
+                            tbar: [
+                                {
+                                    text: gettext('Add'),
+                                    iconCls: 'fa fa-plus',
+                                    handler: function () {
+                                        Ext.Msg.prompt(gettext('Add Portal'), gettext('Portal IP:'),
+                                            function (btn, val) {
+                                                if (btn !== 'ok' || !val) return;
+                                                var p = val.trim();
+                                                if (!p.match(/:/)) p += ':3260';
+                                                portalsStore.add({ portal: p });
+                                            });
+                                    },
                                 },
-                            },
-                            {
-                                text: gettext('Remove'),
-                                iconCls: 'fa fa-trash-o',
-                                handler: function () {
-                                    var g = me.down('#portalsGrid');
-                                    var sel = g.getSelection();
-                                    if (sel.length) portalsStore.remove(sel);
+                                {
+                                    text: gettext('Remove'),
+                                    iconCls: 'fa fa-trash-o',
+                                    handler: function () {
+                                        var g = me.down('#portalsGrid');
+                                        var sel = g.getSelection();
+                                        if (sel.length) portalsStore.remove(sel);
+                                    },
                                 },
-                            },
-                        ],
-                    }],
+                            ],
+                        },
+                    ],
                 },
 
                 // --- Step 3 ---
@@ -578,14 +589,15 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                         store: targetsStore,
                         columns: [
                             { xtype: 'checkcolumn', dataIndex: 'selected', header: '', width: 40 },
-                            { text: gettext('Target IQN'), dataIndex: 'target_iqn', flex: 2 },
-                            { text: gettext('Portal'),     dataIndex: 'portal',     flex: 1 },
-                            { text: gettext('Status'),     dataIndex: 'already_connected',
+                            { text: gettext('Target'),    dataIndex: 'target_iqn', flex: 2 },
+                            { text: gettext('Transport'), dataIndex: 'transport',  width: 70 },
+                            { text: gettext('Portal'),    dataIndex: 'portal',     flex: 1 },
+                            { text: gettext('Status'),    dataIndex: 'already_connected',
                               renderer: function (v) { return v ? gettext('already connected') : ''; } },
                         ],
                     }],
                     tbar: [{
-                        text: gettext('Discover'),
+                        text: gettext('Scan for Targets'),
                         iconCls: 'fa fa-search',
                         handler: function () {
                             var firstNode = null;
@@ -596,37 +608,71 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                 Ext.Msg.alert(gettext('Error'), gettext('Select at least one node.'));
                                 return;
                             }
-                            var portals = portalsStore.collect('portal').join(',');
-                            Proxmox.Utils.API2Request({
-                                url: '/api2/json/nodes/' + firstNode + '/iscsi/discover',
-                                method: 'POST',
-                                params: { portals: portals },
-                                waitMsgTarget: me,
-                                success: function (response) {
-                                    var targets = response.result.data;
-                                    var statusRec = nodeStatusStore.findRecord('node', firstNode);
-                                    var sessions = (statusRec && statusRec.get('_statusData'))
-                                        ? statusRec.get('_statusData').sessions : [];
-                                    var connectedIqns = sessions.map(s => s.target_iqn);
 
-                                    // Deduplicate by IQN
-                                    var seen = {};
-                                    var unique = targets.filter(function (t) {
-                                        if (seen[t.target_iqn]) return false;
+                            targetsStore.removeAll();
+                            var seen = {};
+                            var addTargets = function (items) {
+                                items.forEach(function (t) {
+                                    if (!seen[t.target_iqn]) {
                                         seen[t.target_iqn] = true;
-                                        return true;
-                                    });
-                                    targetsStore.loadData(unique.map(t => ({
-                                        target_iqn: t.target_iqn,
-                                        portal: t.portal,
-                                        selected: true,
-                                        already_connected: connectedIqns.includes(t.target_iqn),
-                                    })));
-                                },
-                                failure: function (r) {
-                                    Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+                                        targetsStore.add(t);
+                                    }
+                                });
+                            };
+
+                            // FC targets — always attempt; returns empty list if no HBAs
+                            Proxmox.Utils.API2Request({
+                                url: '/api2/json/nodes/' + firstNode + '/iscsi/fc/targets',
+                                method: 'GET',
+                                success: function (response) {
+                                    addTargets((response.result.data || []).map(function (t) {
+                                        return {
+                                            target_iqn:        t.port_name,
+                                            portal:            '',
+                                            transport:         'FC',
+                                            selected:          true,
+                                            already_connected: true,
+                                        };
+                                    }));
                                 },
                             });
+
+                            // iSCSI targets — only if portals were entered
+                            var portals = portalsStore.collect('portal');
+                            if (portals.length > 0) {
+                                var statusRec = nodeStatusStore.findRecord('node', firstNode);
+                                var sessions = (statusRec && statusRec.get('_statusData'))
+                                    ? statusRec.get('_statusData').sessions : [];
+                                var connectedIqns = sessions.map(function (s) { return s.target_iqn; });
+
+                                Proxmox.Utils.API2Request({
+                                    url: '/api2/json/nodes/' + firstNode + '/iscsi/discover',
+                                    method: 'POST',
+                                    params: { portals: portals.join(',') },
+                                    waitMsgTarget: me,
+                                    success: function (response) {
+                                        var seenIqn = {};
+                                        addTargets((response.result.data || [])
+                                            .filter(function (t) {
+                                                if (seenIqn[t.target_iqn]) return false;
+                                                seenIqn[t.target_iqn] = true;
+                                                return true;
+                                            })
+                                            .map(function (t) {
+                                                return {
+                                                    target_iqn:        t.target_iqn,
+                                                    portal:            t.portal,
+                                                    transport:         'iSCSI',
+                                                    selected:          true,
+                                                    already_connected: connectedIqns.includes(t.target_iqn),
+                                                };
+                                            }));
+                                    },
+                                    failure: function (r) {
+                                        Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+                                    },
+                                });
+                            }
                         },
                     }],
                 },
@@ -734,7 +780,11 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
             nodeStatusStore.each(function (r) { if (r.get('checked')) nodes.push(r.get('node')); });
 
             var targets = [];
-            targetsStore.each(function (r) { if (r.get('selected')) targets.push(r.get('target_iqn')); });
+            targetsStore.each(function (r) {
+                if (r.get('selected') && r.get('transport') !== 'FC') {
+                    targets.push(r.get('target_iqn'));
+                }
+            });
 
             var portals = portalsStore.collect('portal').join(',');
 
