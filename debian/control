@@ -12,6 +12,6 @@ Depends: pve-manager (>= 9.0),
          libpve-common-perl,
          ${misc:Depends}
 Recommends: open-iscsi, multipath-tools, lvm2, sanlock
-Description: iSCSI and Multipath configuration plugin for Proxmox VE
- Adds iSCSI and multipath management panels to the Proxmox VE web GUI,
- including a datacenter-level setup wizard.
+Description: iSCSI, Fibre Channel and Multipath configuration plugin for Proxmox VE
+ Adds iSCSI, Fibre Channel and multipath management panels to the Proxmox VE web GUI,
+ including a datacenter-level setup wizard supporting both iSCSI and FC transports.
