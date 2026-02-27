@@ -687,7 +687,7 @@ __PACKAGE__->register_method({
         }
 
         my $wwid = defined $host_num ? $host_wwid_map->{$host_num} : undef;
-        return { wwid => undef, already_configured => 0 } unless $wwid;
+        return { already_configured => 0 } unless $wwid;
 
         my ($already, $existing_alias) = (0, undef);
         if (-f '/etc/multipath.conf') {
@@ -696,7 +696,7 @@ __PACKAGE__->register_method({
             local $/;
             my $conf = <$fh>;
             close $fh;
-            if ($conf =~ /\bwwid\s+\Q$wwid\E\b/) {
+            if ($conf =~ /\bwwid\s+\Q$wwid\E(?=\s|$)/) {
                 $already = 1;
                 if ($conf =~ /multipath\s*\{[^}]*\balias\s+(\S+)[^}]*\bwwid\s+\Q$wwid\E/s ||
                     $conf =~ /multipath\s*\{[^}]*\bwwid\s+\Q$wwid\E[^}]*\balias\s+(\S+)/s) {
@@ -744,7 +744,7 @@ __PACKAGE__->register_method({
         }
 
         die "WWID $wwid is already configured in /etc/multipath.conf\n"
-            if $existing =~ /\bwwid\s+\Q$wwid\E\b/;
+            if $existing =~ /\bwwid\s+\Q$wwid\E(?=\s|$)/;
 
         my $new_content = merge_multipath_config($existing, [{ wwid => $wwid, alias => $alias }]);
 
