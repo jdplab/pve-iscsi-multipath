@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 9;
+use Test::More tests => 13;
 use File::Temp qw(tempdir);
 use File::Path qw(make_path);
 
@@ -86,3 +86,33 @@ is(PVE::API2::ISCSIMultipath::_parse_session_host(
        'iqn.2005-10.org.freenas.ctl:proxmox-bruce',
        '192.168.122.15:3260,1'),
    3, '_parse_session_host: strips ,tpgt from caller-supplied portal arg');
+
+# --- _fc_host_for_wwpn ---
+my $rp_base = tempdir(CLEANUP => 1);
+
+# rport-3:0-1 has the target WWPN we're looking for
+my $rport1 = "$rp_base/rport-3:0-1";
+make_path($rport1);
+open my $fh1, '>', "$rport1/port_name" or die;
+print $fh1 '0x500143802426baf4';
+close $fh1;
+
+# rport-7:0-2 has a different WWPN
+my $rport2 = "$rp_base/rport-7:0-2";
+make_path($rport2);
+open my $fh2, '>', "$rport2/port_name" or die;
+print $fh2 '0x500143802426bbbb';
+close $fh2;
+
+is(PVE::API2::ISCSIMultipath::_fc_host_for_wwpn('0x500143802426baf4', $rp_base),
+   3, '_fc_host_for_wwpn: finds host 3 from rport-3:0-1');
+
+is(PVE::API2::ISCSIMultipath::_fc_host_for_wwpn('0x500143802426bbbb', $rp_base),
+   7, '_fc_host_for_wwpn: finds host 7 from rport-7:0-2');
+
+ok(!defined PVE::API2::ISCSIMultipath::_fc_host_for_wwpn('0xdeadbeef', $rp_base),
+   '_fc_host_for_wwpn: unknown WWPN → undef');
+
+ok(!defined PVE::API2::ISCSIMultipath::_fc_host_for_wwpn(
+       '0x500143802426baf4', tempdir(CLEANUP => 1)),
+   '_fc_host_for_wwpn: empty rports dir → undef');

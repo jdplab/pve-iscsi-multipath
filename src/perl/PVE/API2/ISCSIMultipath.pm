@@ -185,6 +185,27 @@ sub _parse_session_host {
     return undef;
 }
 
+# Find the local SCSI host number for a given remote FC target WWPN by reading
+# /sys/class/fc_remote_ports.  $rports_base can be overridden for testing.
+sub _fc_host_for_wwpn {
+    my ($wwpn, $rports_base) = @_;
+    $rports_base //= '/sys/class/fc_remote_ports';
+    for my $rport_path (glob "$rports_base/rport-*") {
+        my $pn = '';
+        if (open my $fh, '<', "$rport_path/port_name") {
+            local $/;
+            ($pn = <$fh>) =~ s/\s+$//;
+            close $fh;
+        }
+        if ($pn eq $wwpn) {
+            my $name = (split m{/}, $rport_path)[-1];  # rport-H:B-I
+            my ($h) = ($name =~ /^rport-(\d+):/);
+            return defined $h ? $h + 0 : undef;
+        }
+    }
+    return undef;
+}
+
 # Thin wrapper around system commands — can be mocked in tests
 sub _run_cmd {
     my ($cmd, %opts) = @_;
