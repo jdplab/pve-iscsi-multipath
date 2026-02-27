@@ -637,6 +637,83 @@ sub lvm_conf_has_lvmlockd {
 }
 
 __PACKAGE__->register_method({
+    name        => 'get_wwid',
+    path        => 'multipath/wwid',
+    method      => 'GET',
+    protected   => 1,
+    proxyto     => 'node',
+    description => 'Detect the multipath WWID for an iSCSI target or FC target.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => {
+            node       => get_standard_option('pve-node'),
+            target_iqn => { type => 'string', optional => 1,
+                            description => 'iSCSI Target IQN' },
+            portal     => { type => 'string', optional => 1,
+                            description => 'iSCSI portal IP:port' },
+            fc_wwpn    => { type => 'string', optional => 1,
+                            description => 'FC remote target WWPN' },
+        },
+    },
+    returns => {
+        type => 'object',
+        properties => {
+            wwid               => { type => 'string',  optional => 1 },
+            already_configured => { type => 'boolean' },
+            existing_alias     => { type => 'string',  optional => 1 },
+        },
+    },
+    code => sub {
+        my ($param) = @_;
+
+        my $mp_out = '';
+        eval { _run_cmd(['multipath', '-ll'],
+                        outfunc => sub { $mp_out .= $_[0] . "\n" },
+                        errfunc => sub {}) };
+        my $host_wwid_map = _build_host_wwid_map($mp_out);
+
+        my $host_num;
+        if ($param->{target_iqn} && $param->{portal}) {
+            my $p3_out = '';
+            eval { _run_cmd(['iscsiadm', '-m', 'session', '-P', '3'],
+                            outfunc => sub { $p3_out .= $_[0] . "\n" },
+                            errfunc => sub {}) };
+            $host_num = _parse_session_host($p3_out, $param->{target_iqn}, $param->{portal});
+        } elsif ($param->{fc_wwpn}) {
+            $host_num = _fc_host_for_wwpn($param->{fc_wwpn});
+        } else {
+            die "Provide target_iqn+portal or fc_wwpn\n";
+        }
+
+        my $wwid = defined $host_num ? $host_wwid_map->{$host_num} : undef;
+        return { wwid => undef, already_configured => 0 } unless $wwid;
+
+        my ($already, $existing_alias) = (0, undef);
+        if (-f '/etc/multipath.conf') {
+            open my $fh, '<', '/etc/multipath.conf'
+                or die "Cannot read /etc/multipath.conf: $!\n";
+            local $/;
+            my $conf = <$fh>;
+            close $fh;
+            if ($conf =~ /\bwwid\s+\Q$wwid\E\b/) {
+                $already = 1;
+                if ($conf =~ /multipath\s*\{[^}]*\balias\s+(\S+)[^}]*\bwwid\s+\Q$wwid\E/s ||
+                    $conf =~ /multipath\s*\{[^}]*\bwwid\s+\Q$wwid\E[^}]*\balias\s+(\S+)/s) {
+                    $existing_alias = $1;
+                }
+            }
+        }
+
+        return {
+            wwid               => $wwid,
+            already_configured => $already ? 1 : 0,
+            $existing_alias ? (existing_alias => $existing_alias) : (),
+        };
+    },
+});
+
+__PACKAGE__->register_method({
     name        => 'setup',
     path        => 'setup',
     method      => 'POST',
