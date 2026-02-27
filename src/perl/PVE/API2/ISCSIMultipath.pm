@@ -714,6 +714,53 @@ __PACKAGE__->register_method({
 });
 
 __PACKAGE__->register_method({
+    name        => 'add_multipath_device',
+    path        => 'multipath/add-device',
+    method      => 'POST',
+    protected   => 1,
+    proxyto     => 'node',
+    description => 'Add a WWID + alias block to /etc/multipath.conf.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => {
+            node  => get_standard_option('pve-node'),
+            wwid  => { type => 'string', description => 'Multipath device WWID' },
+            alias => { type => 'string', description => 'Human-readable alias name' },
+        },
+    },
+    returns => { type => 'null' },
+    code => sub {
+        my ($param) = @_;
+        my ($wwid, $alias) = ($param->{wwid}, $param->{alias});
+
+        my $existing = '';
+        if (-f '/etc/multipath.conf') {
+            open my $fh, '<', '/etc/multipath.conf'
+                or die "Cannot read /etc/multipath.conf: $!\n";
+            local $/;
+            $existing = <$fh>;
+            close $fh;
+        }
+
+        die "WWID $wwid is already configured in /etc/multipath.conf\n"
+            if $existing =~ /\bwwid\s+\Q$wwid\E\b/;
+
+        my $new_content = merge_multipath_config($existing, [{ wwid => $wwid, alias => $alias }]);
+
+        open my $fh, '>', '/etc/multipath.conf'
+            or die "Cannot write /etc/multipath.conf: $!\n";
+        print $fh $new_content;
+        close $fh;
+
+        eval { _run_cmd(['multipathd', 'reconfigure'],
+                        outfunc => sub {}, errfunc => sub {}) };
+
+        return undef;
+    },
+});
+
+__PACKAGE__->register_method({
     name        => 'setup',
     path        => 'setup',
     method      => 'POST',
