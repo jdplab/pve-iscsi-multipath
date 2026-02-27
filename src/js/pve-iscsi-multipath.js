@@ -494,6 +494,38 @@ Ext.define('PVE.node.FCPanel', {
             return '<span style="color:' + color + '">' + Ext.String.htmlEncode(v || '') + '</span>';
         };
 
+        var fcTargetsGrid = Ext.create('Ext.grid.Panel', {
+            title: gettext('Connected FC Targets'),
+            flex: 2,
+            store: targetsStore,
+            columns: [
+                { text: 'Remote WWPN',      dataIndex: 'port_name',  flex: 2 },
+                { text: gettext('Via HBA'), dataIndex: 'hba',        width: 70 },
+                { text: gettext('State'),   dataIndex: 'port_state', width: 80, renderer: stateRenderer },
+            ],
+            tbar: [
+                {
+                    text: gettext('Configure Multipath'),
+                    iconCls: 'fa fa-link',
+                    itemId: 'fcConfigMpBtn',
+                    disabled: true,
+                    handler: function () {
+                        var sel = fcTargetsGrid.getSelection();
+                        if (!sel.length) return;
+                        Ext.create('PVE.node.ConfigureMultipathDialog', {
+                            nodename: nodename,
+                            fc_wwpn: sel[0].get('port_name'),
+                        }).show();
+                    },
+                },
+            ],
+            listeners: {
+                selectionchange: function (sm, selected) {
+                    fcTargetsGrid.down('#fcConfigMpBtn').setDisabled(!selected.length);
+                },
+            },
+        });
+
         Ext.apply(me, {
             items: [
                 {
@@ -520,17 +552,7 @@ Ext.define('PVE.node.FCPanel', {
                         },
                     ],
                 },
-                {
-                    xtype: 'grid',
-                    title: gettext('Connected FC Targets'),
-                    flex: 2,
-                    store: targetsStore,
-                    columns: [
-                        { text: 'Remote WWPN',    dataIndex: 'port_name', flex: 2 },
-                        { text: gettext('Via HBA'), dataIndex: 'hba',     width: 70 },
-                        { text: gettext('State'),  dataIndex: 'port_state', width: 80, renderer: stateRenderer },
-                    ],
-                },
+                fcTargetsGrid,
             ],
         });
 
