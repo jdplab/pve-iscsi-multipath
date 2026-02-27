@@ -80,9 +80,9 @@ ok(!defined PVE::API2::ISCSIMultipath::_parse_session_host(
        '192.168.122.15:3260'),
    '_parse_session_host: unknown target → undef');
 
-# Portal with ,tpgt suffix in iscsiadm output is stripped correctly
+# Input-side ,tpgt stripping: caller passes portal WITH tpgt suffix
 is(PVE::API2::ISCSIMultipath::_parse_session_host(
        $session_p3,
        'iqn.2005-10.org.freenas.ctl:proxmox-bruce',
-       '192.168.122.15:3260'),
-   3, '_parse_session_host: strips ,tpgt from portal in output');
+       '192.168.122.15:3260,1'),
+   3, '_parse_session_host: strips ,tpgt from caller-supplied portal arg');

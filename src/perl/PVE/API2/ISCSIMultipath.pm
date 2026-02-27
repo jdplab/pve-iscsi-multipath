@@ -152,7 +152,7 @@ sub _build_host_wwid_map {
         } elsif ($line =~ /^([^\s(]+)\s+dm-\d+/) {
             $current_wwid = $1;                    # unaliased: wwid dm-N
         }
-        if ($current_wwid && $line =~ /[|`\s]-\s+(\d+):\d+:\d+:\d+/) {
+        if ($current_wwid && $line =~ /[|`]-\s+(\d+):\d+:\d+:\d+/) {
             $map{$1} = $current_wwid;
         }
     }
