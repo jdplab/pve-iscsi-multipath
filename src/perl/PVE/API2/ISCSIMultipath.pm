@@ -140,6 +140,51 @@ sub merge_multipath_config {
     return $existing;
 }
 
+# Build a map of { host_num => wwid } from `multipath -ll` text output.
+# Handles both aliased ("alias (wwid) dm-N") and unaliased ("wwid dm-N") lines.
+sub _build_host_wwid_map {
+    my ($mp_output) = @_;
+    my %map;
+    my $current_wwid;
+    for my $line (split /\n/, $mp_output) {
+        if ($line =~ /\(([^)]+)\)\s+dm-\d+/) {
+            $current_wwid = $1;                    # aliased: alias (wwid) dm-N
+        } elsif ($line =~ /^([^\s(]+)\s+dm-\d+/) {
+            $current_wwid = $1;                    # unaliased: wwid dm-N
+        }
+        if ($current_wwid && $line =~ /[|`\s]-\s+(\d+):\d+:\d+:\d+/) {
+            $map{$1} = $current_wwid;
+        }
+    }
+    return \%map;
+}
+
+# Parse `iscsiadm -m session -P 3` text to find the SCSI host number for a
+# given target_iqn + portal pair.  Returns undef if not found.
+sub _parse_session_host {
+    my ($session_p3_output, $target_iqn, $portal) = @_;
+    $portal =~ s/,\d+$//;                          # strip ,tpgt if present
+    $portal .= ':3260' unless $portal =~ /:\d+$/;  # default port
+
+    my ($in_target, $portal_ok);
+    for my $line (split /\n/, $session_p3_output) {
+        if ($line =~ /^\s*Target:\s+(\S+)/) {
+            $in_target  = ($1 eq $target_iqn);
+            $portal_ok  = 0;
+        }
+        next unless $in_target;
+        if ($line =~ /Current Portal:\s+(\S+?)(?:,\d+)?\s*$/) {
+            my $p = $1;
+            $p .= ':3260' unless $p =~ /:\d+$/;
+            $portal_ok = ($p eq $portal);
+        }
+        if ($portal_ok && $line =~ /Host Number:\s+(\d+)/) {
+            return $1 + 0;
+        }
+    }
+    return undef;
+}
+
 # Thin wrapper around system commands — can be mocked in tests
 sub _run_cmd {
     my ($cmd, %opts) = @_;
@@ -174,6 +219,8 @@ __PACKAGE__->register_method({
     name        => 'status',
     path        => 'status',
     method      => 'GET',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'Get iSCSI and multipath status for this node.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
     parameters  => {
@@ -232,6 +279,8 @@ __PACKAGE__->register_method({
     name        => 'discover',
     path        => 'discover',
     method      => 'POST',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'Run iSCSI target discovery against one or more portals.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
     parameters  => {
@@ -269,6 +318,8 @@ __PACKAGE__->register_method({
     name        => 'sessions',
     path        => 'sessions',
     method      => 'GET',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'List active iSCSI sessions.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
     parameters  => {
@@ -290,6 +341,8 @@ __PACKAGE__->register_method({
     name        => 'login',
     path        => 'login',
     method      => 'POST',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'Login to an iSCSI target on a portal. No-ops if already connected.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
     parameters  => {
@@ -328,6 +381,8 @@ __PACKAGE__->register_method({
     name        => 'logout',
     path        => 'logout',
     method      => 'POST',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'Logout from an iSCSI target on a portal.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
     parameters  => {
@@ -353,6 +408,8 @@ __PACKAGE__->register_method({
     name        => 'set_startup',
     path        => 'startup',
     method      => 'PUT',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'Set auto-login mode for an iSCSI target.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
     parameters  => {
@@ -384,6 +441,8 @@ __PACKAGE__->register_method({
     name        => 'fc_hbas',
     path        => 'fc/hbas',
     method      => 'GET',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'List local Fibre Channel HBAs from sysfs.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
     parameters  => {
@@ -401,6 +460,8 @@ __PACKAGE__->register_method({
     name        => 'fc_targets',
     path        => 'fc/targets',
     method      => 'GET',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'List FC fabric targets visible through local HBAs.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
     parameters  => {
@@ -418,6 +479,8 @@ __PACKAGE__->register_method({
     name        => 'fc_rescan',
     path        => 'fc/rescan',
     method      => 'POST',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'Trigger LIP (fabric re-enumeration) on all local FC HBAs.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
     parameters  => {
@@ -441,6 +504,8 @@ __PACKAGE__->register_method({
     name        => 'multipath_status',
     path        => 'multipath/status',
     method      => 'GET',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'Get current multipath device status.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
     parameters  => {
@@ -462,6 +527,8 @@ __PACKAGE__->register_method({
     name        => 'get_multipath_config',
     path        => 'multipath/config',
     method      => 'GET',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'Get current /etc/multipath.conf content.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Audit']] },
     parameters  => {
@@ -487,6 +554,8 @@ __PACKAGE__->register_method({
     name        => 'put_multipath_config',
     path        => 'multipath/config',
     method      => 'PUT',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'Write /etc/multipath.conf and restart multipathd.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
     parameters  => {
@@ -550,6 +619,8 @@ __PACKAGE__->register_method({
     name        => 'setup',
     path        => 'setup',
     method      => 'POST',
+    protected   => 1,
+    proxyto     => 'node',
     description => 'Run full iSCSI/multipath setup sequence. Idempotent.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
     parameters  => {
