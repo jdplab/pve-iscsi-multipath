@@ -1134,12 +1134,6 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                     flex: 1,
                                     editor: { xtype: 'textfield', allowBlank: false },
                                 },
-                                {
-                                    text: gettext('New?'),
-                                    dataIndex: 'is_new',
-                                    renderer: function (v) { return v ? gettext('Yes') : ''; },
-                                    width: 60,
-                                },
                             ],
                             selModel: 'cellmodel',
                             plugins: [{ ptype: 'cellediting', clicksToEdit: 1 }],
@@ -1511,10 +1505,6 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                 var store = me.down('#wwidsGrid').getStore();
                                 store.removeAll();
 
-                                (d.multipath_devices || []).forEach(function (dev) {
-                                    store.add({ wwid: dev.wwid, alias: dev.alias, is_new: false, target_iqn: '' });
-                                });
-
                                 Proxmox.Utils.API2Request({
                                     url: '/nodes/' + firstNode + '/iscsi/multipath/status',
                                     method: 'GET',
@@ -1527,17 +1517,18 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                         _skipNextTabChange = true;
                                         panel.setActiveTab(newTab);
 
-                                        // Async: enrich Target column via WWID lookup per session
-                                        (d.sessions || []).forEach(function (session) {
+                                        // Async: enrich Target column for each newly selected target
+                                        var firstPortal = portals[0] || '';
+                                        selectedTargets.forEach(function (iqn) {
                                             Proxmox.Utils.API2Request({
                                                 url: '/nodes/' + firstNode + '/iscsi/multipath/wwid',
                                                 method: 'GET',
-                                                params: { target_iqn: session.target_iqn, portal: session.portal },
+                                                params: { target_iqn: iqn, portal: firstPortal },
                                                 success: function (r3) {
                                                     var wwid = r3.result.data && r3.result.data.wwid;
                                                     if (wwid) {
                                                         var rec = store.findRecord('wwid', wwid, 0, false, false, true);
-                                                        if (rec) rec.set('target_iqn', session.target_iqn);
+                                                        if (rec) rec.set('target_iqn', iqn);
                                                     }
                                                 },
                                             });
