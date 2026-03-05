@@ -945,6 +945,54 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                         if (sel.length) portalsStore.remove(sel);
                                     },
                                 },
+                                '-',
+                                {
+                                    text: gettext('Load from existing sessions'),
+                                    iconCls: 'fa fa-download',
+                                    handler: function () {
+                                        var checkedNodes = [];
+                                        nodeStatusStore.each(function (r) {
+                                            if (r.get('checked')) checkedNodes.push(r.get('node'));
+                                        });
+                                        if (!checkedNodes.length) {
+                                            Ext.Msg.show({
+                                                title: gettext('Load Portals'),
+                                                icon: Ext.Msg.WARNING,
+                                                message: gettext('No nodes selected in step 1.'),
+                                                buttons: Ext.Msg.OK,
+                                            });
+                                            return;
+                                        }
+                                        var pending = checkedNodes.length;
+                                        var added = 0;
+                                        checkedNodes.forEach(function (node) {
+                                            Proxmox.Utils.API2Request({
+                                                url: '/nodes/' + node + '/iscsi/sessions',
+                                                method: 'GET',
+                                                success: function (r) {
+                                                    (r.result.data || []).forEach(function (s) {
+                                                        var p = (s.portal || '').replace(/,\d+$/, '');
+                                                        if (!p.match(/:/)) p += ':3260';
+                                                        if (p && !portalsStore.findRecord('portal', p, 0, false, false, true)) {
+                                                            portalsStore.add({ portal: p });
+                                                            added++;
+                                                        }
+                                                    });
+                                                    pending--;
+                                                    if (pending === 0 && added === 0) {
+                                                        Ext.Msg.show({
+                                                            title: gettext('Load Portals'),
+                                                            icon: Ext.Msg.INFO,
+                                                            message: gettext('No new portals found in existing sessions.'),
+                                                            buttons: Ext.Msg.OK,
+                                                        });
+                                                    }
+                                                },
+                                                failure: function () { pending--; },
+                                            });
+                                        });
+                                    },
+                                },
                             ],
                         },
                     ],
