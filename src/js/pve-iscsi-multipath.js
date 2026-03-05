@@ -388,7 +388,7 @@ Ext.define('PVE.node.MultipathPanel', {
 
         var editConfig = function () {
             Proxmox.Utils.API2Request({
-                url: '/api2/json/nodes/' + nodename + '/iscsi/multipath/config',
+                url: '/nodes/' + nodename + '/iscsi/multipath/config',
                 method: 'GET',
                 success: function (response) {
                     var content = response.result.data.content;
@@ -633,7 +633,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                 if (!rec.get('checked')) return;
                 var node = rec.get('node');
                 Proxmox.Utils.API2Request({
-                    url: '/api2/json/nodes/' + node + '/iscsi/status',
+                    url: '/nodes/' + node + '/iscsi/status',
                     method: 'GET',
                     success: function (response) {
                         var d = response.result.data;
@@ -809,7 +809,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
 
                             // FC targets — always attempt; returns empty list if no HBAs
                             Proxmox.Utils.API2Request({
-                                url: '/api2/json/nodes/' + firstNode + '/iscsi/fc/targets',
+                                url: '/nodes/' + firstNode + '/iscsi/fc/targets',
                                 method: 'GET',
                                 success: function (response) {
                                     addTargets((response.result.data || []).map(function (t) {
@@ -833,7 +833,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                 var connectedIqns = sessions.map(function (s) { return s.target_iqn; });
 
                                 Proxmox.Utils.API2Request({
-                                    url: '/api2/json/nodes/' + firstNode + '/iscsi/discover',
+                                    url: '/nodes/' + firstNode + '/iscsi/discover',
                                     method: 'POST',
                                     params: { portals: portals.join(',') },
                                     waitMsgTarget: me,
@@ -1035,7 +1035,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                         var logArea = section.down('#log-' + node);
                         var poll = setInterval(function () {
                             Proxmox.Utils.API2Request({
-                                url: '/api2/json/nodes/' + node + '/tasks/' + encodeURIComponent(upid) + '/log',
+                                url: '/nodes/' + node + '/tasks/' + encodeURIComponent(upid) + '/log',
                                 method: 'GET',
                                 params: { start: 0, limit: 500 },
                                 success: function (r) {
@@ -1044,7 +1044,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                 },
                             });
                             Proxmox.Utils.API2Request({
-                                url: '/api2/json/nodes/' + node + '/tasks/' + encodeURIComponent(upid) + '/status',
+                                url: '/nodes/' + node + '/tasks/' + encodeURIComponent(upid) + '/status',
                                 method: 'GET',
                                 success: function (r) {
                                     if (r.result.data.status === 'stopped') {
@@ -1127,7 +1127,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
 
                     Promise.all(loginPromises).then(function () {
                         Proxmox.Utils.API2Request({
-                            url: '/api2/json/nodes/' + firstNode + '/iscsi/status',
+                            url: '/nodes/' + firstNode + '/iscsi/status',
                             method: 'GET',
                             success: function (response) {
                                 var d = response.result.data;
@@ -1140,7 +1140,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                 });
 
                                 Proxmox.Utils.API2Request({
-                                    url: '/api2/json/nodes/' + firstNode + '/iscsi/multipath/status',
+                                    url: '/nodes/' + firstNode + '/iscsi/multipath/status',
                                     method: 'GET',
                                     success: function (r2) {
                                         (r2.result.data || []).forEach(function (dev) {
