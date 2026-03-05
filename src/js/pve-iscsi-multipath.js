@@ -884,7 +884,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
 
         // Step 4 data (populated after login transition)
         var wwidsStore = Ext.create('Ext.data.Store', {
-            fields: ['wwid', 'alias', 'is_new'],
+            fields: ['wwid', 'alias', 'is_new', 'target_iqn'],
             data: [],
         });
 
@@ -1012,8 +1012,6 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                             { text: gettext('Target'),    dataIndex: 'target_iqn', flex: 2 },
                             { text: gettext('Transport'), dataIndex: 'transport',  width: 70 },
                             { text: gettext('Portal'),    dataIndex: 'portal',     flex: 1 },
-                            { text: gettext('Status'),    dataIndex: 'already_connected',
-                              renderer: function (v) { return v ? gettext('already connected') : ''; } },
                         ],
                     }],
                     tbar: [{
@@ -1033,6 +1031,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                             var seen = {};
                             var addTargets = function (items) {
                                 items.forEach(function (t) {
+                                    if (t.already_connected) return;
                                     if (!seen[t.target_iqn]) {
                                         seen[t.target_iqn] = true;
                                         targetsStore.add(t);
@@ -1118,7 +1117,17 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                             itemId: 'wwidsGrid',
                             flex: 1,
                             columns: [
-                                { text: 'WWID', dataIndex: 'wwid',  flex: 2 },
+                                { text: 'WWID', dataIndex: 'wwid', flex: 2 },
+                                {
+                                    text: gettext('Target'),
+                                    dataIndex: 'target_iqn',
+                                    flex: 1,
+                                    renderer: function (v) {
+                                        if (!v) return '';
+                                        var parts = v.split(':');
+                                        return Ext.String.htmlEncode(parts[parts.length - 1]);
+                                    },
+                                },
                                 {
                                     text: gettext('Alias'),
                                     dataIndex: 'alias',
@@ -1503,7 +1512,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                 store.removeAll();
 
                                 (d.multipath_devices || []).forEach(function (dev) {
-                                    store.add({ wwid: dev.wwid, alias: dev.alias, is_new: false });
+                                    store.add({ wwid: dev.wwid, alias: dev.alias, is_new: false, target_iqn: '' });
                                 });
 
                                 Proxmox.Utils.API2Request({
@@ -1512,11 +1521,27 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                     success: function (r2) {
                                         (r2.result.data || []).forEach(function (dev) {
                                             if (!existingWwids.includes(dev.wwid)) {
-                                                store.add({ wwid: dev.wwid, alias: dev.alias || '', is_new: true });
+                                                store.add({ wwid: dev.wwid, alias: dev.alias || '', is_new: true, target_iqn: '' });
                                             }
                                         });
                                         _skipNextTabChange = true;
                                         panel.setActiveTab(newTab);
+
+                                        // Async: enrich Target column via WWID lookup per session
+                                        (d.sessions || []).forEach(function (session) {
+                                            Proxmox.Utils.API2Request({
+                                                url: '/nodes/' + firstNode + '/iscsi/multipath/wwid',
+                                                method: 'GET',
+                                                params: { target_iqn: session.target_iqn, portal: session.portal },
+                                                success: function (r3) {
+                                                    var wwid = r3.result.data && r3.result.data.wwid;
+                                                    if (wwid) {
+                                                        var rec = store.findRecord('wwid', wwid, 0, false, false, true);
+                                                        if (rec) rec.set('target_iqn', session.target_iqn);
+                                                    }
+                                                },
+                                            });
+                                        });
                                     },
                                 });
                             },
