@@ -292,6 +292,103 @@ Ext.define('PVE.node.ISCSIPanel', {
             ],
         });
 
+        var showAddLvmDialog = function (alias) {
+            var dlg = Ext.create('Ext.window.Window', {
+                title: gettext('Add LVM Storage'),
+                width: 420,
+                modal: true,
+                resizable: false,
+                bodyPadding: 10,
+                items: [
+                    {
+                        xtype: 'displayfield',
+                        fieldLabel: gettext('Device'),
+                        value: '/dev/mapper/' + alias,
+                        labelWidth: 100,
+                    },
+                    {
+                        xtype: 'textfield',
+                        fieldLabel: gettext('VG Name'),
+                        itemId: 'dlgVgName',
+                        labelWidth: 100,
+                        value: alias + '-vg',
+                        allowBlank: false,
+                        regex: /^\S+$/,
+                        regexText: gettext('No spaces allowed'),
+                    },
+                    {
+                        xtype: 'textfield',
+                        fieldLabel: gettext('Storage ID'),
+                        itemId: 'dlgStorageId',
+                        labelWidth: 100,
+                        value: alias,
+                        allowBlank: false,
+                        regex: /^\S+$/,
+                        regexText: gettext('No spaces allowed'),
+                    },
+                ],
+                buttons: [
+                    {
+                        text: gettext('Add'),
+                        handler: function () {
+                            var vgName = dlg.down('#dlgVgName').getValue().trim();
+                            var storageId = dlg.down('#dlgStorageId').getValue().trim();
+                            if (!vgName || !storageId) return;
+
+                            dlg.setLoading(gettext('Creating LVM storage\u2026'));
+                            Proxmox.Utils.API2Request({
+                                url: '/nodes/' + nodename + '/iscsi/lvm-setup',
+                                method: 'POST',
+                                params: { device: alias, vg_name: vgName, storage_id: storageId },
+                                success: function (r) {
+                                    dlg.setLoading(false);
+                                    var d = r.result.data;
+                                    var warns = [];
+                                    if (d.pv_existed)      warns.push(gettext('PV already existed — skipped pvcreate'));
+                                    if (d.vg_existed)      warns.push(gettext('VG already existed — skipped vgcreate'));
+                                    if (d.storage_existed) warns.push(gettext('Storage already registered — skipped'));
+                                    if (warns.length) {
+                                        Ext.Msg.show({
+                                            title: gettext('Add LVM Storage'),
+                                            icon: Ext.Msg.INFO,
+                                            message: warns.join('<br>'),
+                                            buttons: Ext.Msg.OK,
+                                        });
+                                    }
+                                    dlg.close();
+
+                                    // Fire-and-forget lvm-scan on other cluster nodes
+                                    Proxmox.Utils.API2Request({
+                                        url: '/cluster/status',
+                                        method: 'GET',
+                                        success: function (cr) {
+                                            (cr.result.data || [])
+                                                .filter(function(n) { return n.type === 'node' && n.name !== nodename; })
+                                                .forEach(function (n) {
+                                                    Proxmox.Utils.API2Request({
+                                                        url: '/nodes/' + n.name + '/iscsi/lvm-scan',
+                                                        method: 'POST',
+                                                    });
+                                                });
+                                        },
+                                    });
+                                },
+                                failure: function (r) {
+                                    dlg.setLoading(false);
+                                    Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+                                },
+                            });
+                        },
+                    },
+                    {
+                        text: gettext('Cancel'),
+                        handler: function () { dlg.close(); },
+                    },
+                ],
+            });
+            dlg.show();
+        };
+
         var sessionsGrid = Ext.create('Ext.grid.Panel', {
             title: gettext('Sessions'),
             flex: 2,
@@ -399,10 +496,47 @@ Ext.define('PVE.node.ISCSIPanel', {
                         }).show();
                     },
                 },
+                {
+                    text: gettext('Add LVM Storage'),
+                    iconCls: 'fa fa-database',
+                    itemId: 'iscsiAddLvmBtn',
+                    disabled: true,
+                    handler: function () {
+                        var sel = sessionsGrid.getSelection();
+                        if (!sel.length) return;
+                        var target_iqn = sel[0].get('target_iqn');
+                        var portal = sel[0].get('portal');
+
+                        // Get WWID/alias for this session to pre-fill fields
+                        Proxmox.Utils.API2Request({
+                            url: '/nodes/' + nodename + '/iscsi/multipath/wwid',
+                            method: 'GET',
+                            params: { target_iqn: target_iqn, portal: portal },
+                            success: function (response) {
+                                var d = response.result.data;
+                                if (!d.wwid) {
+                                    Ext.Msg.show({
+                                        title: gettext('Add LVM Storage'),
+                                        icon: Ext.Msg.WARNING,
+                                        message: gettext('No multipath device found for this target. Configure Multipath first.'),
+                                        buttons: Ext.Msg.OK,
+                                    });
+                                    return;
+                                }
+                                var alias = d.existing_alias || d.wwid;
+                                showAddLvmDialog(alias);
+                            },
+                            failure: function (r) {
+                                Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+                            },
+                        });
+                    },
+                },
             ],
             listeners: {
                 selectionchange: function (sm, selected) {
                     sessionsGrid.down('#iscsiConfigMpBtn').setDisabled(!selected.length);
+                    sessionsGrid.down('#iscsiAddLvmBtn').setDisabled(!selected.length);
                 },
             },
         });
