@@ -81,7 +81,7 @@ Ext.define('PVE.node.ConfigureMultipathDialog', {
             : { target_iqn: me.target_iqn, portal: me.portal };
 
         Proxmox.Utils.API2Request({
-            url: '/api2/json/nodes/' + me.nodename + '/iscsi/multipath/wwid',
+            url: '/nodes/' + me.nodename + '/iscsi/multipath/wwid',
             method: 'GET',
             params: params,
             success: function (response) {
