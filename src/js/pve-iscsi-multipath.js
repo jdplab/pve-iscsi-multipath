@@ -1609,8 +1609,9 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                 if (goingForward && oldTab.itemId === 'step5') {
                     var skipLvm5 = me.down('#chkSkipLvm').getValue();
                     if (!skipLvm5) {
-                        var step5Form = me.down('#step5');
-                        if (!step5Form.isValid()) {
+                        var lvmVgName = me.down('#lvmVgName');
+                        var lvmStorageId = me.down('#lvmStorageId');
+                        if (!lvmVgName.isValid() || !lvmStorageId.isValid()) {
                             return false;
                         }
                         var primaryNodeVal = me.down('#lvmPrimaryNode').getValue();
