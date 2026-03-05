@@ -986,8 +986,14 @@ __PACKAGE__->register_method({
                 local $/;
                 my $existing = <$fh>;
                 close $fh;
-                $config = $existing . "\n" . $config;
-                print "Merged with existing config.\n";
+                # Extract only the new wwid/alias blocks from the submitted config
+                # and merge them into the existing file, preserving all other entries.
+                my @new_entries;
+                while ($config =~ /multipath\s*\{[^}]*\bwwid\s+(\S+)[^}]*\balias\s+(\S+)[^}]*\}/gs) {
+                    push @new_entries, { wwid => $1, alias => $2 };
+                }
+                $config = merge_multipath_config($existing, \@new_entries);
+                print "Merged " . scalar(@new_entries) . " new device(s) into existing config.\n";
             }
             open my $fh, '>', '/etc/multipath.conf'
                 or die "Cannot write /etc/multipath.conf: $!\n";

@@ -1341,7 +1341,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                         portals:          portals,
                         targets:          targets.join(','),
                         multipath_config: mpConfig,
-                        merge_multipath:  0,
+                        merge_multipath:  1,
                         enable_lvmlockd:  enableLvmlockd ? 1 : 0,
                         enable_sanlock:   enableSanlock  ? 1 : 0,
                     },
