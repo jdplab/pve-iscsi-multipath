@@ -1069,9 +1069,17 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                             var portals = portalsStore.collect('portal');
                             if (portals.length > 0) {
                                 var statusRec = nodeStatusStore.findRecord('node', firstNode);
-                                var sessions = (statusRec && statusRec.get('_statusData'))
-                                    ? statusRec.get('_statusData').sessions : [];
+                                var statusData = (statusRec && statusRec.get('_statusData')) || {};
+                                var sessions = statusData.sessions || [];
                                 var connectedIqns = sessions.map(function (s) { return s.target_iqn; });
+
+                                // A target is "already configured" only if it has both a session
+                                // AND a matching multipath alias. A session alone (e.g. logged in
+                                // but multipath wiped) means it still needs setup.
+                                var configuredAliases = {};
+                                (statusData.multipath_devices || []).forEach(function (dev) {
+                                    if (dev.alias) configuredAliases[dev.alias.toLowerCase()] = true;
+                                });
 
                                 Proxmox.Utils.API2Request({
                                     url: '/nodes/' + firstNode + '/iscsi/discover',
@@ -1080,12 +1088,15 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                     waitMsgTarget: me,
                                     success: function (response) {
                                         addTargets((response.result.data || []).map(function (t) {
+                                            var hasSession = connectedIqns.includes(t.target_iqn);
+                                            var iqnSuffix = t.target_iqn.split(':').pop().toLowerCase();
+                                            var hasAlias = !!configuredAliases[iqnSuffix];
                                             return {
                                                 target_iqn:        t.target_iqn,
                                                 portal:            t.portal,
                                                 transport:         'iSCSI',
                                                 selected:          true,
-                                                already_connected: connectedIqns.includes(t.target_iqn),
+                                                already_connected: hasSession && hasAlias,
                                             };
                                         }));
                                     },
