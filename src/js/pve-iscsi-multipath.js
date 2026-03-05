@@ -222,15 +222,66 @@ Ext.define('PVE.node.ISCSIPanel', {
                                     });
                                     return;
                                 }
-                                var msg = gettext('Found targets') + ':\n' +
-                                    targets.map(t => t.target_iqn + ' (' + t.portal + ')').join('\n');
-                                Ext.Msg.show({
-                                    title: gettext('Discovery'),
-                                    icon: Ext.Msg.INFO,
-                                    message: msg,
-                                    buttons: Ext.Msg.OK,
+                                // Deduplicate by IQN — one row per target
+                                var seen = {};
+                                var unique = targets.filter(function (t) {
+                                    if (seen[t.target_iqn]) return false;
+                                    seen[t.target_iqn] = true;
+                                    return true;
                                 });
-                                reloadSessions();
+                                var discStore = Ext.create('Ext.data.Store', {
+                                    fields: ['target_iqn', 'portal'],
+                                    data: unique,
+                                });
+                                var discGrid = Ext.create('Ext.grid.Panel', {
+                                    store: discStore,
+                                    selModel: { selType: 'checkboxmodel', mode: 'MULTI' },
+                                    columns: [
+                                        { text: gettext('Target IQN'), dataIndex: 'target_iqn', flex: 2 },
+                                        { text: gettext('Portal'),     dataIndex: 'portal',     flex: 1 },
+                                    ],
+                                    height: 200,
+                                    border: false,
+                                });
+                                var discWin = Ext.create('Ext.window.Window', {
+                                    title: gettext('Discovered Targets'),
+                                    width: 580,
+                                    modal: true,
+                                    bodyPadding: 0,
+                                    items: [discGrid],
+                                    buttons: [
+                                        {
+                                            text: gettext('Login Selected'),
+                                            iconCls: 'fa fa-plug',
+                                            handler: function () {
+                                                var sel = discGrid.getSelection();
+                                                if (!sel.length) return;
+                                                var portals = portalsStore.collect('portal');
+                                                var done = 0, total = sel.length * portals.length;
+                                                sel.forEach(function (rec) {
+                                                    portals.forEach(function (portal) {
+                                                        Proxmox.Utils.API2Request({
+                                                            url: '/nodes/' + nodename + '/iscsi/login',
+                                                            method: 'POST',
+                                                            params: { target_iqn: rec.get('target_iqn'), portal: portal },
+                                                            success: function () {
+                                                                if (++done === total) { discWin.close(); reloadSessions(); }
+                                                            },
+                                                            failure: function (r) {
+                                                                Ext.Msg.alert(gettext('Error'), r.htmlStatus);
+                                                            },
+                                                        });
+                                                    });
+                                                });
+                                            },
+                                        },
+                                        {
+                                            text: gettext('Close'),
+                                            handler: function () { discWin.close(); reloadSessions(); },
+                                        },
+                                    ],
+                                });
+                                discWin.show();
                             },
                             failure: function (response) {
                                 Ext.Msg.alert(gettext('Error'), response.htmlStatus);
