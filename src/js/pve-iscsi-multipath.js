@@ -961,7 +961,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                 {
                     title: gettext('Services'),
                     xtype: 'panel',
-                    itemId: 'step5',
+                    itemId: 'step6',
                     bodyPadding: 10,
                     items: [
                         {
@@ -999,7 +999,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                 {
                     title: gettext('Apply'),
                     xtype: 'panel',
-                    itemId: 'step6',
+                    itemId: 'step7',
                     layout: 'fit',
                     items: [{
                         xtype: 'container',
@@ -1012,7 +1012,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
             ],
         });
 
-        // Apply step: run setup on each node sequentially (called when entering step6)
+        // Apply step: run setup on each node sequentially (called when entering step7)
         var startApply = function () {
             var nodes = [];
             nodeStatusStore.each(function (r) { if (r.get('checked')) nodes.push(r.get('node')); });
@@ -1236,8 +1236,8 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                     });
                 }
 
-                // step5 → step6 (forward): start apply process
-                if (goingForward && oldTab.itemId === 'step5') {
+                // step6 → step7 (forward): start apply process
+                if (goingForward && oldTab.itemId === 'step6') {
                     startApply();
                 }
             });
