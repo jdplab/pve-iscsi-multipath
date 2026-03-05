@@ -90,18 +90,26 @@ Ext.define('PVE.node.ConfigureMultipathDialog', {
 
                 if (!d.wwid) {
                     me.close();
-                    Ext.Msg.alert(gettext('No Device Found'),
-                        gettext('No multipath device detected for this target. ' +
-                                'Ensure multipathd is running and the device is visible.'));
+                    Ext.Msg.show({
+                        title: gettext('No Device Found'),
+                        icon: Ext.Msg.INFO,
+                        message: gettext('No multipath device detected for this target. ' +
+                                         'Ensure multipathd is running and the device is visible.'),
+                        buttons: Ext.Msg.OK,
+                    });
                     return;
                 }
                 if (d.already_configured) {
                     me.close();
-                    Ext.Msg.alert(gettext('Already Configured'),
-                        Ext.String.format(
+                    Ext.Msg.show({
+                        title: gettext('Already Configured'),
+                        icon: Ext.Msg.INFO,
+                        message: Ext.String.format(
                             gettext("WWID {0} is already configured as '{1}'."),
                             d.wwid,
-                            d.existing_alias || '(unknown)'));
+                            d.existing_alias || '(unknown)'),
+                        buttons: Ext.Msg.OK,
+                    });
                     return;
                 }
 
@@ -206,12 +214,22 @@ Ext.define('PVE.node.ISCSIPanel', {
                             success: function (response) {
                                 var targets = response.result.data;
                                 if (!targets.length) {
-                                    Ext.Msg.alert(gettext('Discovery'), gettext('No targets found.'));
+                                    Ext.Msg.show({
+                                        title: gettext('Discovery'),
+                                        icon: Ext.Msg.INFO,
+                                        message: gettext('No targets found.'),
+                                        buttons: Ext.Msg.OK,
+                                    });
                                     return;
                                 }
                                 var msg = gettext('Found targets') + ':\n' +
                                     targets.map(t => t.target_iqn + ' (' + t.portal + ')').join('\n');
-                                Ext.Msg.alert(gettext('Discovery'), msg);
+                                Ext.Msg.show({
+                                    title: gettext('Discovery'),
+                                    icon: Ext.Msg.INFO,
+                                    message: msg,
+                                    buttons: Ext.Msg.OK,
+                                });
                                 reloadSessions();
                             },
                             failure: function (response) {
