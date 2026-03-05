@@ -774,9 +774,9 @@ __PACKAGE__->register_method({
         additionalProperties => 0,
         properties => {
             node       => get_standard_option('pve-node'),
-            device     => { type => 'string', description => 'Multipath device name under /dev/mapper (e.g. proxmox-matt)', pattern => '\S+' },
-            vg_name    => { type => 'string', description => 'LVM volume group name', pattern => '\S+', maxLength => 63 },
-            storage_id => { type => 'string', description => 'Proxmox storage ID', pattern => '\S+', maxLength => 100 },
+            device     => { type => 'string', description => 'Multipath device name under /dev/mapper (e.g. proxmox-matt)', pattern => '[a-zA-Z0-9_.@-]+' },
+            vg_name    => { type => 'string', description => 'LVM volume group name', pattern => '[a-zA-Z0-9+_.@][a-zA-Z0-9+_.@-]*', maxLength => 63 },
+            storage_id => { type => 'string', description => 'Proxmox storage ID', pattern => '[a-zA-Z][a-zA-Z0-9\\-_.]*', maxLength => 100 },
         },
     },
     returns => {
@@ -812,6 +812,13 @@ __PACKAGE__->register_method({
         eval { _run_cmd(['vgdisplay', $vg_name], outfunc => sub {}, errfunc => sub {}) };
         if (!$@) {
             $vg_existed = 1;
+            my $pv_backing = '';
+            eval { _run_cmd(['vgs', '--noheadings', '-o', 'pv_name', $vg_name],
+                            outfunc => sub { $pv_backing .= $_[0] },
+                            errfunc => sub {}) };
+            $pv_backing =~ s/^\s+|\s+$//g;
+            die "VG '$vg_name' already exists but is backed by a different PV — refusing to overwrite\n"
+                unless index($pv_backing, $dev_path) != -1;
         } else {
             _run_cmd(['vgcreate', $vg_name, $dev_path],
                      outfunc => sub {}, errfunc => sub { die "$_[0]\n" });
@@ -859,8 +866,11 @@ __PACKAGE__->register_method({
     },
     returns => { type => 'null' },
     code => sub {
+        my ($param) = @_;
         eval { _run_cmd(['pvscan'],  outfunc => sub {}, errfunc => sub {}) };
+        warn "lvm-scan: pvscan failed: $@\n" if $@;
         eval { _run_cmd(['vgscan'],  outfunc => sub {}, errfunc => sub {}) };
+        warn "lvm-scan: vgscan failed: $@\n" if $@;
         return undef;
     },
 });
