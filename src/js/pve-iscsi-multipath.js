@@ -1475,35 +1475,36 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                     });
                     var portals = portalsStore.collect('portal');
                     var firstNode = nodes[0];
-                    var loginPromises = [];
 
-                    selectedTargets.forEach(function (iqn) {
-                        portals.forEach(function (portal) {
-                            var p = new Promise(function (resolve) {
-                                Proxmox.Utils.API2Request({
-                                    url: '/nodes/' + firstNode + '/iscsi/login',
-                                    method: 'POST',
-                                    params: { target_iqn: iqn, portal: portal },
-                                    success: function (r) {
-                                        if (!r.result.data.already_connected) {
-                                            me._wizardLogins.push({ node: firstNode, iqn: iqn, portal: portal });
-                                        }
-                                        resolve();
-                                    },
-                                    failure: resolve,
+                    // Capture pre-login baseline first, then log in, then diff
+                    Proxmox.Utils.API2Request({
+                        url: '/nodes/' + firstNode + '/iscsi/status',
+                        method: 'GET',
+                        success: function (statusResponse) {
+                            var existingWwids = (statusResponse.result.data.multipath_devices || []).map(m => m.wwid);
+
+                            var loginPromises = [];
+                            selectedTargets.forEach(function (iqn) {
+                                portals.forEach(function (portal) {
+                                    var p = new Promise(function (resolve) {
+                                        Proxmox.Utils.API2Request({
+                                            url: '/nodes/' + firstNode + '/iscsi/login',
+                                            method: 'POST',
+                                            params: { target_iqn: iqn, portal: portal },
+                                            success: function (r) {
+                                                if (!r.result.data.already_connected) {
+                                                    me._wizardLogins.push({ node: firstNode, iqn: iqn, portal: portal });
+                                                }
+                                                resolve();
+                                            },
+                                            failure: resolve,
+                                        });
+                                    });
+                                    loginPromises.push(p);
                                 });
                             });
-                            loginPromises.push(p);
-                        });
-                    });
 
-                    Promise.all(loginPromises).then(function () {
-                        Proxmox.Utils.API2Request({
-                            url: '/nodes/' + firstNode + '/iscsi/status',
-                            method: 'GET',
-                            success: function (response) {
-                                var d = response.result.data;
-                                var existingWwids = (d.multipath_devices || []).map(m => m.wwid);
+                            Promise.all(loginPromises).then(function () {
                                 var store = me.down('#wwidsGrid').getStore();
                                 store.removeAll();
 
@@ -1537,8 +1538,8 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                         });
                                     },
                                 });
-                            },
-                        });
+                            });
+                        },
                     });
 
                     return false;
