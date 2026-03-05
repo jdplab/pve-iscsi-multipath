@@ -818,7 +818,7 @@ __PACKAGE__->register_method({
                             errfunc => sub {}) };
             $pv_backing =~ s/^\s+|\s+$//g;
             die "VG '$vg_name' already exists but is backed by a different PV — refusing to overwrite\n"
-                unless index($pv_backing, $dev_path) != -1;
+                if index($pv_backing, $dev_path) == -1;
         } else {
             _run_cmd(['vgcreate', $vg_name, $dev_path],
                      outfunc => sub {}, errfunc => sub { die "$_[0]\n" });
