@@ -722,7 +722,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
 
         // Load cluster nodes
         Proxmox.Utils.API2Request({
-            url: '/api2/json/cluster/status',
+            url: '/cluster/status',
             method: 'GET',
             success: function (response) {
                 var nodes = (response.result.data || []).filter(n => n.type === 'node');
@@ -1225,7 +1225,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                 // step4 → step5 (forward): pre-populate service checkboxes from cluster size
                 if (goingForward && oldTab.itemId === 'step4') {
                     Proxmox.Utils.API2Request({
-                        url: '/api2/json/cluster/status',
+                        url: '/cluster/status',
                         method: 'GET',
                         success: function (r) {
                             var nodeCount = (r.result.data || []).filter(n => n.type === 'node').length;
