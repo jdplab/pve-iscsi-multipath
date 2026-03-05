@@ -1035,6 +1035,15 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                     if (!seen[t.target_iqn]) {
                                         seen[t.target_iqn] = true;
                                         targetsStore.add(t);
+                                    } else if (t.portal) {
+                                        // Same target advertised by an additional portal — append it
+                                        var rec = targetsStore.findRecord('target_iqn', t.target_iqn, 0, false, false, true);
+                                        if (rec) {
+                                            var existing = rec.get('portal') || '';
+                                            if (existing.indexOf(t.portal) === -1) {
+                                                rec.set('portal', existing ? existing + ', ' + t.portal : t.portal);
+                                            }
+                                        }
                                     }
                                 });
                             };
@@ -1070,22 +1079,15 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                     params: { portals: portals.join(',') },
                                     waitMsgTarget: me,
                                     success: function (response) {
-                                        var seenIqn = {};
-                                        addTargets((response.result.data || [])
-                                            .filter(function (t) {
-                                                if (seenIqn[t.target_iqn]) return false;
-                                                seenIqn[t.target_iqn] = true;
-                                                return true;
-                                            })
-                                            .map(function (t) {
-                                                return {
-                                                    target_iqn:        t.target_iqn,
-                                                    portal:            t.portal,
-                                                    transport:         'iSCSI',
-                                                    selected:          true,
-                                                    already_connected: connectedIqns.includes(t.target_iqn),
-                                                };
-                                            }));
+                                        addTargets((response.result.data || []).map(function (t) {
+                                            return {
+                                                target_iqn:        t.target_iqn,
+                                                portal:            t.portal,
+                                                transport:         'iSCSI',
+                                                selected:          true,
+                                                already_connected: connectedIqns.includes(t.target_iqn),
+                                            };
+                                        }));
                                     },
                                     failure: function (r) {
                                         Ext.Msg.alert(gettext('Error'), r.htmlStatus);
