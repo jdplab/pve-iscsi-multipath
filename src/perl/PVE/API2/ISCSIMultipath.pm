@@ -924,7 +924,16 @@ __PACKAGE__->register_method({
                                              && !check_package_installed('sanlock');
             if (@missing) {
                 print "Installing: @missing\n";
-                _run_cmd(['apt-get', 'install', '-y', @missing]);
+                eval { _run_cmd(['apt-get', 'install', '-y', @missing]) };
+                if ($@) {
+                    # apt-get can exit non-zero when a pre-existing broken package's
+                    # postinst fails even though our packages installed correctly.
+                    # Only fail if we still can't find what we needed.
+                    my @still_missing = grep { !check_package_installed($_) } @missing;
+                    die "Package installation failed, still missing: @still_missing\n$@"
+                        if @still_missing;
+                    warn "apt-get reported errors but required packages installed successfully\n";
+                }
             } else {
                 print "All packages already installed - skipped.\n";
             }
