@@ -763,6 +763,109 @@ __PACKAGE__->register_method({
 });
 
 __PACKAGE__->register_method({
+    name        => 'lvm_setup',
+    path        => 'lvm-setup',
+    method      => 'POST',
+    protected   => 1,
+    proxyto     => 'node',
+    description => 'Create PV and VG on a multipath device and register as Proxmox LVM storage.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => {
+            node       => get_standard_option('pve-node'),
+            device     => { type => 'string', description => 'Multipath device name under /dev/mapper (e.g. proxmox-matt)', pattern => '\S+' },
+            vg_name    => { type => 'string', description => 'LVM volume group name', pattern => '\S+', maxLength => 63 },
+            storage_id => { type => 'string', description => 'Proxmox storage ID', pattern => '\S+', maxLength => 100 },
+        },
+    },
+    returns => {
+        type => 'object',
+        properties => {
+            pv_existed      => { type => 'integer', description => '1 if PV already existed' },
+            vg_existed      => { type => 'integer', description => '1 if VG already existed' },
+            storage_existed => { type => 'integer', description => '1 if Proxmox storage already registered' },
+        },
+    },
+    code => sub {
+        my ($param) = @_;
+        my ($device, $vg_name, $storage_id) = ($param->{device}, $param->{vg_name}, $param->{storage_id});
+
+        my $dev_path = "/dev/mapper/$device";
+        die "Multipath device $dev_path not found - ensure multipathd is running and WWID is configured\n"
+            unless -e $dev_path;
+
+        my $pv_existed = 0;
+        my $vg_existed = 0;
+        my $storage_existed = 0;
+
+        # Check / create PV
+        eval { _run_cmd(['pvdisplay', $dev_path], outfunc => sub {}, errfunc => sub {}) };
+        if (!$@) {
+            $pv_existed = 1;
+        } else {
+            _run_cmd(['pvcreate', $dev_path],
+                     outfunc => sub {}, errfunc => sub { die "$_[0]\n" });
+        }
+
+        # Check / create VG
+        eval { _run_cmd(['vgdisplay', $vg_name], outfunc => sub {}, errfunc => sub {}) };
+        if (!$@) {
+            $vg_existed = 1;
+        } else {
+            _run_cmd(['vgcreate', $vg_name, $dev_path],
+                     outfunc => sub {}, errfunc => sub { die "$_[0]\n" });
+        }
+
+        # Check / register Proxmox storage
+        eval {
+            _run_cmd(
+                ['pvesm', 'add', 'lvm', $storage_id,
+                 '--vgname',   $vg_name,
+                 '--shared',   '1',
+                 '--content',  'images,rootdir',
+                 '--saferemove', '0'],
+                outfunc => sub {},
+                errfunc => sub { die "$_[0]\n" },
+            );
+        };
+        if ($@) {
+            if ($@ =~ /already defined/) {
+                $storage_existed = 1;
+            } else {
+                die $@;
+            }
+        }
+
+        return {
+            pv_existed      => $pv_existed,
+            vg_existed      => $vg_existed,
+            storage_existed => $storage_existed,
+        };
+    },
+});
+
+__PACKAGE__->register_method({
+    name        => 'lvm_scan',
+    path        => 'lvm-scan',
+    method      => 'POST',
+    protected   => 1,
+    proxyto     => 'node',
+    description => 'Run pvscan and vgscan to discover LVM VGs created on other nodes.',
+    permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
+    parameters  => {
+        additionalProperties => 0,
+        properties => { node => get_standard_option('pve-node') },
+    },
+    returns => { type => 'null' },
+    code => sub {
+        eval { _run_cmd(['pvscan'],  outfunc => sub {}, errfunc => sub {}) };
+        eval { _run_cmd(['vgscan'],  outfunc => sub {}, errfunc => sub {}) };
+        return undef;
+    },
+});
+
+__PACKAGE__->register_method({
     name        => 'setup',
     path        => 'setup',
     method      => 'POST',
