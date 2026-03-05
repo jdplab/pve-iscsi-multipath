@@ -957,7 +957,67 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                     ],
                 },
 
-                // --- Step 5: Services ---
+                // --- Step 5: LVM Storage ---
+                {
+                    title: gettext('LVM Storage'),
+                    xtype: 'panel',
+                    itemId: 'step5',
+                    bodyPadding: 10,
+                    layout: { type: 'vbox', align: 'stretch' },
+                    items: [
+                        {
+                            xtype: 'proxmoxcheckbox',
+                            itemId: 'chkSkipLvm',
+                            boxLabel: gettext('Skip LVM setup'),
+                            value: false,
+                            listeners: {
+                                change: function (cb, val) {
+                                    var step = cb.up('#step5');
+                                    step.down('#lvmPrimaryNode').setDisabled(val);
+                                    step.down('#lvmDevice').setDisabled(val);
+                                    step.down('#lvmVgName').setDisabled(val);
+                                    step.down('#lvmStorageId').setDisabled(val);
+                                },
+                            },
+                        },
+                        {
+                            xtype: 'displayfield',
+                            fieldLabel: gettext('Device'),
+                            itemId: 'lvmDevice',
+                            labelWidth: 110,
+                        },
+                        {
+                            xtype: 'combobox',
+                            fieldLabel: gettext('Primary Node'),
+                            itemId: 'lvmPrimaryNode',
+                            labelWidth: 110,
+                            store: { fields: ['node'], data: [] },
+                            displayField: 'node',
+                            valueField: 'node',
+                            editable: false,
+                        },
+                        {
+                            xtype: 'textfield',
+                            fieldLabel: gettext('VG Name'),
+                            itemId: 'lvmVgName',
+                            labelWidth: 110,
+                            allowBlank: false,
+                            regex: /^\S+$/,
+                            regexText: gettext('No spaces allowed'),
+                        },
+                        {
+                            xtype: 'textfield',
+                            fieldLabel: gettext('Storage ID'),
+                            itemId: 'lvmStorageId',
+                            labelWidth: 110,
+                            allowBlank: false,
+                            regex: /^\S+$/,
+                            regexText: gettext('No spaces allowed'),
+                        },
+                    ],
+                },
+
+                // --- Step 6: Services ---
                 {
                     title: gettext('Services'),
                     xtype: 'panel',
@@ -1048,11 +1108,6 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
 
             var runNextNode = function (idx) {
                 if (idx >= nodes.length) {
-                    container.add({
-                        xtype: 'displayfield',
-                        value: '<b>' + gettext('All nodes complete.') + '</b>',
-                        margin: '10 0 0 0',
-                    });
                     return;
                 }
                 var node = nodes[idx];
@@ -1111,6 +1166,78 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                         runNextNode(idx + 1);
                     },
                 });
+            };
+
+            // Wrap runNextNode so LVM setup runs after all per-node setup completes
+            var _origRunNextNode = runNextNode;
+            runNextNode = function (idx) {
+                if (idx >= nodes.length) {
+                    var skipLvm = me.down('#chkSkipLvm') && me.down('#chkSkipLvm').getValue();
+                    if (skipLvm) {
+                        container.add({ xtype: 'displayfield', value: '<b>' + gettext('All nodes complete.') + '</b>', margin: '10 0 0 0' });
+                        return;
+                    }
+                    var primaryNode = me.down('#lvmPrimaryNode') && me.down('#lvmPrimaryNode').getValue();
+                    var device = me.down('#lvmDevice') && me.down('#lvmDevice').getValue();
+                    var vgName = me.down('#lvmVgName') && me.down('#lvmVgName').getValue();
+                    var storageId = me.down('#lvmStorageId') && me.down('#lvmStorageId').getValue();
+
+                    if (!primaryNode || !device || !vgName || !storageId) {
+                        container.add({ xtype: 'displayfield', value: '<b>' + gettext('All nodes complete.') + '</b>', margin: '10 0 0 0' });
+                        return;
+                    }
+
+                    // Strip '/dev/mapper/' prefix to get bare device name
+                    var deviceName = device.replace(/^\/dev\/mapper\//, '');
+
+                    var lvmSection = Ext.create('Ext.panel.Panel', {
+                        title: gettext('LVM Storage'),
+                        collapsible: true,
+                        bodyPadding: 5,
+                        items: [{ xtype: 'textarea', readOnly: true, height: 80,
+                                  fieldStyle: 'font-family: monospace; font-size: 11px;',
+                                  itemId: 'lvm-log' }],
+                    });
+                    container.add(lvmSection);
+                    var log = lvmSection.down('#lvm-log');
+
+                    Proxmox.Utils.API2Request({
+                        url: '/nodes/' + primaryNode + '/iscsi/lvm-setup',
+                        method: 'POST',
+                        params: { device: deviceName, vg_name: vgName, storage_id: storageId },
+                        success: function (r) {
+                            var d = r.result.data;
+                            var msgs = [];
+                            if (d.pv_existed)      msgs.push(gettext('Warning: PV already existed on') + ' /dev/mapper/' + deviceName + ' — skipped pvcreate');
+                            if (d.vg_existed)      msgs.push(gettext('Warning: VG') + ' ' + vgName + ' ' + gettext('already existed — skipped vgcreate'));
+                            if (d.storage_existed) msgs.push(gettext('Warning: Storage') + ' "' + storageId + '" ' + gettext('already registered — skipped'));
+                            if (msgs.length) {
+                                log.setValue(msgs.join('\n'));
+                            } else {
+                                log.setValue(gettext('PV, VG, and Proxmox storage created successfully.'));
+                            }
+
+                            // Fire-and-forget lvm-scan on non-primary nodes
+                            nodes.filter(function(n) { return n !== primaryNode; }).forEach(function (n) {
+                                Proxmox.Utils.API2Request({
+                                    url: '/nodes/' + n + '/iscsi/lvm-scan',
+                                    method: 'POST',
+                                    failure: function (r) {
+                                        log.setValue(log.getValue() + '\n' + gettext('Warning: lvm-scan failed on') + ' ' + n + ': ' + r.htmlStatus);
+                                    },
+                                });
+                            });
+
+                            container.add({ xtype: 'displayfield', value: '<b>' + gettext('All nodes complete.') + '</b>', margin: '10 0 0 0' });
+                        },
+                        failure: function (r) {
+                            log.setValue('ERROR: ' + r.htmlStatus);
+                            container.add({ xtype: 'displayfield', value: '<b>' + gettext('All nodes complete.') + '</b>', margin: '10 0 0 0' });
+                        },
+                    });
+                    return;
+                }
+                _origRunNextNode(idx);
             };
 
             runNextNode(0);
@@ -1222,8 +1349,36 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                     me._wizardLogins = [];
                 }
 
-                // step4 → step5 (forward): pre-populate service checkboxes from cluster size
+                // step4 → step5 (forward): populate LVM step fields from wwidsGrid alias
                 if (goingForward && oldTab.itemId === 'step4') {
+                    var newAlias = null;
+                    me.down('#wwidsGrid').getStore().each(function (r) {
+                        if (r.get('is_new') && !newAlias) newAlias = r.get('alias');
+                    });
+
+                    var step5 = me.down('#step5');
+                    if (newAlias) {
+                        step5.down('#lvmDevice').setValue('/dev/mapper/' + newAlias);
+                        step5.down('#lvmVgName').setValue(newAlias + '-vg');
+                        step5.down('#lvmStorageId').setValue(newAlias);
+                        step5.down('#chkSkipLvm').setValue(false);
+                    } else {
+                        step5.down('#lvmDevice').setValue('(no new WWID configured)');
+                        step5.down('#chkSkipLvm').setValue(true);
+                    }
+
+                    // Populate primary node combobox from checked nodes
+                    var nodeList = [];
+                    nodeStatusStore.each(function (r) {
+                        if (r.get('checked')) nodeList.push({ node: r.get('node') });
+                    });
+                    var combo = step5.down('#lvmPrimaryNode');
+                    combo.getStore().loadData(nodeList);
+                    if (nodeList.length) combo.setValue(nodeList[0].node);
+                }
+
+                // step5 → step6 (forward): pre-populate service checkboxes from cluster size
+                if (goingForward && oldTab.itemId === 'step5') {
                     Proxmox.Utils.API2Request({
                         url: '/cluster/status',
                         method: 'GET',
