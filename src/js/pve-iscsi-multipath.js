@@ -1325,6 +1325,12 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                     // Strip '/dev/mapper/' prefix to get bare device name
                     var deviceName = device.replace(/^\/dev\/mapper\//, '');
 
+                    // Guard against sentinel device value (set when no new WWID was configured)
+                    if (!deviceName || /[\s()]/.test(deviceName)) {
+                        container.add({ xtype: 'displayfield', value: '<b style="color:red;">' + gettext('LVM setup skipped: no valid device configured. Use Skip LVM setup or configure a multipath device first.') + '</b>', margin: '10 0 0 0' });
+                        return;
+                    }
+
                     var lvmSection = Ext.create('Ext.panel.Panel', {
                         title: gettext('LVM Storage'),
                         collapsible: true,
@@ -1367,7 +1373,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                         },
                         failure: function (r) {
                             log.setValue('ERROR: ' + r.htmlStatus);
-                            container.add({ xtype: 'displayfield', value: '<b>' + gettext('All nodes complete.') + '</b>', margin: '10 0 0 0' });
+                            container.add({ xtype: 'displayfield', value: '<b style="color:red;">' + gettext('Apply finished with errors — LVM setup failed.') + '</b>', margin: '10 0 0 0' });
                         },
                     });
                     return;
@@ -1512,8 +1518,25 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                     if (nodeList.length) combo.setValue(nodeList[0].node);
                 }
 
-                // step5 → step6 (forward): pre-populate service checkboxes from selected node count
+                // step5 → step6 (forward): validate LVM fields and pre-populate service checkboxes
                 if (goingForward && oldTab.itemId === 'step5') {
+                    var skipLvm5 = me.down('#chkSkipLvm').getValue();
+                    if (!skipLvm5) {
+                        var step5Form = me.down('#step5');
+                        if (!step5Form.isValid()) {
+                            return false;
+                        }
+                        var primaryNodeVal = me.down('#lvmPrimaryNode').getValue();
+                        if (!primaryNodeVal) {
+                            Ext.Msg.show({
+                                title: gettext('LVM Storage'),
+                                icon: Ext.Msg.WARNING,
+                                message: gettext('Please select a primary node for LVM setup.'),
+                                buttons: Ext.Msg.OK,
+                            });
+                            return false;
+                        }
+                    }
                     var checkedNodeCount = 0;
                     nodeStatusStore.each(function (r) { if (r.get('checked')) checkedNodeCount++; });
                     var isCluster = checkedNodeCount > 1;

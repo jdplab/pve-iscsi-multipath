@@ -809,16 +809,23 @@ __PACKAGE__->register_method({
         }
 
         # Check / create VG
+        my $vg_check = 0;
         eval { _run_cmd(['vgdisplay', $vg_name], outfunc => sub {}, errfunc => sub {}) };
-        if (!$@) {
+        $vg_check = $@ ? 0 : 1;
+        if ($vg_check) {
             $vg_existed = 1;
-            my $pv_backing = '';
-            eval { _run_cmd(['vgs', '--noheadings', '-o', 'pv_name', $vg_name],
-                            outfunc => sub { $pv_backing .= $_[0] },
-                            errfunc => sub {}) };
-            $pv_backing =~ s/^\s+|\s+$//g;
+            # Verify the existing VG is backed by our device
+            my @pv_list;
+            eval {
+                _run_cmd(
+                    ['vgs', '--noheadings', '-o', 'pv_name', $vg_name],
+                    outfunc => sub { push @pv_list, split(/\s+/, $_[0]) },
+                    errfunc => sub {},
+                );
+            };
+            @pv_list = grep { $_ ne '' } @pv_list;
             die "VG '$vg_name' already exists but is backed by a different PV — refusing to overwrite\n"
-                if index($pv_backing, $dev_path) == -1;
+                unless grep { $_ eq $dev_path } @pv_list;
         } else {
             _run_cmd(['vgcreate', $vg_name, $dev_path],
                      outfunc => sub {}, errfunc => sub { die "$_[0]\n" });
