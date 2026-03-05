@@ -1145,11 +1145,21 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                     text: gettext('Alias'),
                                     dataIndex: 'alias',
                                     flex: 1,
-                                    editor: { xtype: 'textfield', allowBlank: false },
+                                    xtype: 'widgetcolumn',
+                                    widget: {
+                                        xtype: 'textfield',
+                                        allowBlank: false,
+                                        listeners: {
+                                            blur: function (field) {
+                                                var rec = field.getWidgetRecord();
+                                                if (rec) {
+                                                    rec.set('alias', field.getValue());
+                                                }
+                                            },
+                                        },
+                                    },
                                 },
                             ],
-                            selModel: 'cellmodel',
-                            plugins: [{ ptype: 'cellediting', clicksToEdit: 1 }],
                             store: wwidsStore,
                         },
                     ],
