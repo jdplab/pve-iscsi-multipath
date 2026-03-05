@@ -995,6 +995,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                             displayField: 'node',
                             valueField: 'node',
                             editable: false,
+                            allowBlank: false,
                         },
                         {
                             xtype: 'textfield',
@@ -1055,7 +1056,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                     ],
                 },
 
-                // --- Step 6: Apply ---
+                // --- Step 7: Apply ---
                 {
                     title: gettext('Apply'),
                     xtype: 'panel',
@@ -1183,7 +1184,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                     var storageId = me.down('#lvmStorageId') && me.down('#lvmStorageId').getValue();
 
                     if (!primaryNode || !device || !vgName || !storageId) {
-                        container.add({ xtype: 'displayfield', value: '<b>' + gettext('All nodes complete.') + '</b>', margin: '10 0 0 0' });
+                        container.add({ xtype: 'displayfield', value: '<b style="color:red;">' + gettext('LVM setup skipped: missing required fields (primary node, device, VG name, or storage ID).') + '</b>', margin: '10 0 0 0' });
                         return;
                     }
 
@@ -1377,18 +1378,13 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                     if (nodeList.length) combo.setValue(nodeList[0].node);
                 }
 
-                // step5 → step6 (forward): pre-populate service checkboxes from cluster size
+                // step5 → step6 (forward): pre-populate service checkboxes from selected node count
                 if (goingForward && oldTab.itemId === 'step5') {
-                    Proxmox.Utils.API2Request({
-                        url: '/cluster/status',
-                        method: 'GET',
-                        success: function (r) {
-                            var nodeCount = (r.result.data || []).filter(n => n.type === 'node').length;
-                            var isCluster = nodeCount > 1;
-                            me.down('#chkLvmlockd').setValue(isCluster);
-                            me.down('#chkSanlock').setValue(isCluster);
-                        },
-                    });
+                    var checkedNodeCount = 0;
+                    nodeStatusStore.each(function (r) { if (r.get('checked')) checkedNodeCount++; });
+                    var isCluster = checkedNodeCount > 1;
+                    me.down('#chkLvmlockd').setValue(isCluster);
+                    me.down('#chkSanlock').setValue(isCluster);
                 }
 
                 // step6 → step7 (forward): start apply process
