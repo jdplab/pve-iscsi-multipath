@@ -3,6 +3,7 @@ package PVE::API2::ISCSIMultipath;
 use strict;
 use warnings;
 
+use Fcntl qw(:flock);
 use PVE::JSONSchema qw(get_standard_option);
 use PVE::RPCEnvironment;
 
@@ -56,7 +57,7 @@ sub parse_multipath_status {
             $current->{state} = $1;
         }
         elsif ($current && $line =~ /[|`]-\s+\d+:\d+:\d+:\d+\s+\S+\s+\S+\s+(\w+)/) {
-            $current->{paths}++;
+            $current->{paths}++ if $1 eq 'active' || $1 eq 'ready';
         }
     }
     push @devices, $current if $current;
@@ -125,15 +126,28 @@ sub parse_fc_targets {
 # If no multipaths{} section exists, appends one.
 sub merge_multipath_config {
     my ($existing, $new_entries) = @_;
+
+    # Skip entries whose WWID is already present in the config (dedup).
+    my @to_add = grep { $existing !~ /\bwwid\s+\Q$_->{wwid}\E(?=\s|$)/m } @$new_entries;
+    return $existing unless @to_add;
+
     my $new_blocks = '';
-    for my $entry (@$new_entries) {
+    for my $entry (@to_add) {
         $new_blocks .= sprintf(
             "    multipath {\n        wwid %s\n        alias %s\n    }\n",
             $entry->{wwid}, $entry->{alias}
         );
     }
+
     if ($existing =~ /multipaths\s*\{/) {
-        $existing =~ s/(multipaths\s*\{)((?:[^{}]*|\{[^{}]*\})*)(\})/$1$2$new_blocks$3/s;
+        # Insert before the last closing brace (which closes the multipaths section).
+        # This handles nested braces correctly by working from the end.
+        my $last_brace = rindex($existing, '}');
+        if ($last_brace >= 0) {
+            substr($existing, $last_brace, 0) = $new_blocks;
+        } else {
+            $existing .= "\nmultipaths {\n$new_blocks}\n";
+        }
     } else {
         $existing .= "\nmultipaths {\n$new_blocks}\n";
     }
@@ -370,8 +384,10 @@ __PACKAGE__->register_method({
         additionalProperties => 0,
         properties => {
             node       => get_standard_option('pve-node'),
-            target_iqn => { type => 'string', description => 'Target IQN' },
-            portal     => { type => 'string', description => 'Portal IP:port' },
+            target_iqn => { type => 'string', description => 'Target IQN',
+                            pattern => '^iqn\.\d{4}-\d{2}\.[\w.-]+:[\w.:-]+$' },
+            portal     => { type => 'string', description => 'Portal IP:port',
+                            pattern => '^[\d.]+(?::\d+)?$' },
         },
     },
     returns => { type => 'object', properties => {
@@ -410,8 +426,10 @@ __PACKAGE__->register_method({
         additionalProperties => 0,
         properties => {
             node       => get_standard_option('pve-node'),
-            target_iqn => { type => 'string' },
-            portal     => { type => 'string' },
+            target_iqn => { type => 'string',
+                            pattern => '^iqn\.\d{4}-\d{2}\.[\w.-]+:[\w.:-]+$' },
+            portal     => { type => 'string',
+                            pattern => '^[\d.]+(?::\d+)?$' },
         },
     },
     returns => { type => 'null' },
@@ -437,8 +455,10 @@ __PACKAGE__->register_method({
         additionalProperties => 0,
         properties => {
             node       => get_standard_option('pve-node'),
-            target_iqn => { type => 'string' },
-            portal     => { type => 'string' },
+            target_iqn => { type => 'string',
+                            pattern => '^iqn\.\d{4}-\d{2}\.[\w.-]+:[\w.:-]+$' },
+            portal     => { type => 'string',
+                            pattern => '^[\d.]+(?::\d+)?$' },
             mode       => {
                 type => 'string',
                 enum => ['automatic', 'manual', 'onboot'],
@@ -605,7 +625,20 @@ __PACKAGE__->register_method({
             local $/;
             my $existing = <$fh>;
             close $fh;
-            $content = $existing . "\n" . $content;
+            # Extract wwid/alias entries from submitted content and merge properly.
+            my @new_entries;
+            while ($content =~ /multipath\s*\{([^}]*)\}/gs) {
+                my $block = $1;
+                my ($wwid)  = $block =~ /\bwwid\s+(\S+)/;
+                my ($alias) = $block =~ /\balias\s+(\S+)/;
+                push @new_entries, { wwid => $wwid, alias => $alias } if $wwid && $alias;
+            }
+            if (@new_entries) {
+                $content = merge_multipath_config($existing, \@new_entries);
+            } else {
+                # No new entries — preserve existing content unchanged.
+                $content = $existing;
+            }
         }
 
         my $final_content = $content;
@@ -649,11 +682,14 @@ __PACKAGE__->register_method({
         properties => {
             node       => get_standard_option('pve-node'),
             target_iqn => { type => 'string', optional => 1,
-                            description => 'iSCSI Target IQN' },
+                            description => 'iSCSI Target IQN',
+                            pattern => '^iqn\.\d{4}-\d{2}\.[\w.-]+:[\w.:-]+$' },
             portal     => { type => 'string', optional => 1,
-                            description => 'iSCSI portal IP:port' },
+                            description => 'iSCSI portal IP:port',
+                            pattern => '^[\d.]+(?::\d+)?$' },
             fc_wwpn    => { type => 'string', optional => 1,
-                            description => 'FC remote target WWPN' },
+                            description => 'FC remote target WWPN',
+                            pattern => '^0x[0-9a-fA-F]{16}$' },
         },
     },
     returns => {
@@ -735,6 +771,11 @@ __PACKAGE__->register_method({
         my ($param) = @_;
         my ($wwid, $alias) = ($param->{wwid}, $param->{alias});
 
+        my $lock_file = '/var/lock/pve-iscsi-multipath.lock';
+        open my $lock_fh, '>', $lock_file
+            or die "Cannot open lock file: $!\n";
+        flock($lock_fh, LOCK_EX) or die "Cannot lock $lock_file: $!\n";
+
         my $existing = '';
         if (-f '/etc/multipath.conf') {
             open my $fh, '<', '/etc/multipath.conf'
@@ -753,6 +794,8 @@ __PACKAGE__->register_method({
             or die "Cannot write /etc/multipath.conf: $!\n";
         print $fh $new_content;
         close $fh;
+
+        close $lock_fh;  # releases flock automatically
 
         eval { _run_cmd(['multipathd', 'reconfigure'],
                         outfunc => sub {}, errfunc => sub {}) };
@@ -804,8 +847,7 @@ __PACKAGE__->register_method({
         if (!$@) {
             $pv_existed = 1;
         } else {
-            _run_cmd(['pvcreate', $dev_path],
-                     outfunc => sub {}, errfunc => sub { die "$_[0]\n" });
+            _run_cmd(['pvcreate', $dev_path], outfunc => sub {});
         }
 
         # Check / create VG
@@ -989,8 +1031,11 @@ __PACKAGE__->register_method({
                 # Extract only the new wwid/alias blocks from the submitted config
                 # and merge them into the existing file, preserving all other entries.
                 my @new_entries;
-                while ($config =~ /multipath\s*\{[^}]*\bwwid\s+(\S+)[^}]*\balias\s+(\S+)[^}]*\}/gs) {
-                    push @new_entries, { wwid => $1, alias => $2 };
+                while ($config =~ /multipath\s*\{([^}]*)\}/gs) {
+                    my $block = $1;
+                    my ($wwid)  = $block =~ /\bwwid\s+(\S+)/;
+                    my ($alias) = $block =~ /\balias\s+(\S+)/;
+                    push @new_entries, { wwid => $wwid, alias => $alias } if $wwid && $alias;
                 }
                 $config = merge_multipath_config($existing, \@new_entries);
                 print "Merged " . scalar(@new_entries) . " new device(s) into existing config.\n";
