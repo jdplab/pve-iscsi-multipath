@@ -907,7 +907,7 @@ __PACKAGE__->register_method({
     method      => 'POST',
     protected   => 1,
     proxyto     => 'node',
-    description => 'Run pvscan and vgscan to discover LVM VGs created on other nodes.',
+    description => 'Run pvscan --cache and vgchange -ay to discover and activate LVM VGs created on other nodes.',
     permissions => { check => ['perm', '/nodes/{node}', ['Sys.Modify']] },
     parameters  => {
         additionalProperties => 0,
@@ -916,10 +916,10 @@ __PACKAGE__->register_method({
     returns => { type => 'null' },
     code => sub {
         my ($param) = @_;
-        eval { _run_cmd(['pvscan'],  outfunc => sub {}, errfunc => sub {}) };
-        warn "lvm-scan: pvscan failed: $@\n" if $@;
-        eval { _run_cmd(['vgscan'],  outfunc => sub {}, errfunc => sub {}) };
-        warn "lvm-scan: vgscan failed: $@\n" if $@;
+        eval { _run_cmd(['pvscan', '--cache'],  outfunc => sub {}, errfunc => sub {}) };
+        warn "lvm-scan: pvscan --cache failed: $@\n" if $@;
+        eval { _run_cmd(['vgchange', '-ay'],  outfunc => sub {}, errfunc => sub {}) };
+        warn "lvm-scan: vgchange -ay failed: $@\n" if $@;
         return undef;
     },
 });
