@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests
+        run: make test
+
+      - name: Build deb
+        run: make deb
+
+      - name: Extract version
+        id: version
+        run: echo "version=$(grep '^VERSION=' Makefile | cut -d= -f2)" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DEB="pve-iscsi-multipath_${{ steps.version.outputs.version }}_all.deb"
+          TAG="${{ github.ref_name }}"
+          if gh release view "$TAG" &>/dev/null; then
+            gh release upload "$TAG" "$DEB" --clobber
+          else
+            gh release create "$TAG" "$DEB" \
+              --title "$TAG" \
+              --notes "See commit history for changes."
+          fi
