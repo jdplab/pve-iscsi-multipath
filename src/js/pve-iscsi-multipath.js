@@ -776,10 +776,11 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
     height: 550,
 
     // Track logins performed by this wizard session for rollback on Back
-    _wizardLogins: [],
+    _wizardLogins: null,
 
     initComponent: function () {
         var me = this;
+        me._wizardLogins = [];
 
         // Step 1: Select nodes + status
         var nodeStatusStore = Ext.create('Ext.data.Store', {
@@ -1059,7 +1060,7 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                             portal:            '',
                                             transport:         'FC',
                                             selected:          true,
-                                            already_connected: true,
+                                            already_connected: false,
                                         };
                                     }));
                                 },
@@ -1488,20 +1489,25 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                         return false;
                     }
 
-                    var selectedTargets = [];
+                    var iscsiTargets = [];
+                    var fcTargets = [];
                     targetsStore.each(function (r) {
                         if (r.get('selected') && !r.get('already_connected')) {
-                            selectedTargets.push(r.get('target_iqn'));
+                            if (r.get('transport') === 'FC') {
+                                fcTargets.push({ wwpn: r.get('target_iqn') });
+                            } else {
+                                iscsiTargets.push(r.get('target_iqn'));
+                            }
                         }
                     });
                     var portals = portalsStore.collect('portal');
                     var firstNode = nodes[0];
 
-                    // Login to targets not already connected, then query each
+                    // Login to iSCSI targets not already connected, then query each
                     // target's WWID directly. This works for both freshly-logged-in
                     // and pre-existing sessions (no before/after diff needed).
                     var loginPromises = [];
-                    selectedTargets.forEach(function (iqn) {
+                    iscsiTargets.forEach(function (iqn) {
                         portals.forEach(function (portal) {
                             var p = new Promise(function (resolve) {
                                 Proxmox.Utils.API2Request({
@@ -1525,19 +1531,33 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                         var store = me.down('#wwidsGrid').getStore();
                         store.removeAll();
 
-                        if (!selectedTargets.length) {
+                        var totalPending = iscsiTargets.length + fcTargets.length;
+
+                        if (totalPending === 0) {
                             _skipNextTabChange = true;
                             panel.setActiveTab(newTab);
                             return;
                         }
 
-                        var firstPortal = portals[0] || '';
-                        var pending = selectedTargets.length;
-                        selectedTargets.forEach(function (iqn) {
+                        var checkDone = function () {
+                            totalPending--;
+                            if (totalPending === 0) {
+                                _skipNextTabChange = true;
+                                panel.setActiveTab(newTab);
+                            }
+                        };
+
+                        // iSCSI: try each portal in sequence per target
+                        function tryPortalsForTarget(iqn, portalList, portalIdx) {
+                            if (portalIdx >= portalList.length) {
+                                // All portals exhausted for this target — no WWID found
+                                checkDone();
+                                return;
+                            }
                             Proxmox.Utils.API2Request({
                                 url: '/nodes/' + firstNode + '/iscsi/multipath/wwid',
                                 method: 'GET',
-                                params: { target_iqn: iqn, portal: firstPortal },
+                                params: { target_iqn: iqn, portal: portalList[portalIdx] },
                                 success: function (r3) {
                                     var d = r3.result.data;
                                     var wwid = d && d.wwid;
@@ -1548,15 +1568,47 @@ Ext.define('PVE.dc.ISCSISetupWizard', {
                                             is_new: true,
                                             target_iqn: iqn,
                                         });
+                                        checkDone();
+                                    } else if (wwid) {
+                                        // Found but duplicate — count done
+                                        checkDone();
+                                    } else {
+                                        // No WWID from this portal — try next
+                                        tryPortalsForTarget(iqn, portalList, portalIdx + 1);
                                     }
                                 },
-                                failure: function () {},
-                                callback: function () {
-                                    pending--;
-                                    if (pending === 0) {
-                                        _skipNextTabChange = true;
-                                        panel.setActiveTab(newTab);
+                                failure: function () {
+                                    // This portal failed — try next
+                                    tryPortalsForTarget(iqn, portalList, portalIdx + 1);
+                                },
+                            });
+                        }
+
+                        iscsiTargets.forEach(function (iqn) {
+                            tryPortalsForTarget(iqn, portals, 0);
+                        });
+
+                        // FC: single direct lookup per target (no portal concept)
+                        fcTargets.forEach(function (fc) {
+                            Proxmox.Utils.API2Request({
+                                url: '/nodes/' + firstNode + '/iscsi/multipath/wwid',
+                                method: 'GET',
+                                params: { fc_wwpn: fc.wwpn },
+                                success: function (r3) {
+                                    var d = r3.result.data;
+                                    var wwid = d && d.wwid;
+                                    if (wwid && !store.findRecord('wwid', wwid, 0, false, false, true)) {
+                                        store.add({
+                                            wwid: wwid,
+                                            alias: d.existing_alias || '',
+                                            is_new: true,
+                                            target_iqn: fc.wwpn,
+                                        });
                                     }
+                                    checkDone();
+                                },
+                                failure: function () {
+                                    checkDone();
                                 },
                             });
                         });
