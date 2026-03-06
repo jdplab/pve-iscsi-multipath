@@ -27,32 +27,16 @@ The following packages are optional at install time but required for actual use:
 
 These can be installed from the iSCSI and Multipath tabs in the UI after the plugin is installed.
 
-## Building
-
-```bash
-make deb
-```
-
-This produces `pve-iscsi-multipath_0.2.0_all.deb` in the project root. Requires `dpkg-deb` (standard on any Debian/Ubuntu system).
-
-To run the test suite:
-
-```bash
-make test
-```
-
-55 tests covering session/discovery parsing, multipath config merging, WWID detection, FC HBA parsing, and setup idempotency.
-
 ## Installing
 
-Copy the `.deb` to each node and install it:
+Download the latest `.deb` from the [Releases](https://github.com/jdplab/pve-iscsi-multipath/releases) page, then copy and install it on each node:
 
 ```bash
 scp pve-iscsi-multipath_0.2.0_all.deb root@<node>:/tmp/
 ssh root@<node> dpkg -i /tmp/pve-iscsi-multipath_0.2.0_all.deb
 ```
 
-The postinstall script patches `Nodes.pm` and `index.html.tpl` to inject the plugin, then triggers a pve-manager reload. Hard-refresh the browser after installing on each node (`Ctrl+Shift+R`).
+Repeat for each node in the cluster. The postinstall script patches `Nodes.pm` and `index.html.tpl` to inject the plugin, then triggers a pve-manager reload. Hard-refresh the browser after installing on each node (`Ctrl+Shift+R`).
 
 For a three-node cluster, repeat for each node. The API endpoints are node-local (`proxyto => 'node'`), so each node needs its own installation.
 
