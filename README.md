@@ -6,12 +6,11 @@ A plugin for Proxmox VE that adds iSCSI, Fibre Channel, and multipath SAN manage
 
 ## What it does
 
-Each node gets four new tabs in the Proxmox web UI:
+Each node gets three new tabs in the Proxmox web UI:
 
-- **iSCSI** — discover targets, manage sessions, set auto-login startup mode, install the open-iscsi package
+- **iSCSI** — discover targets, manage sessions, set auto-login startup mode, install the open-iscsi package; includes an LVM Setup button to create a volume group on a multipath device and register it as shared Proxmox storage
 - **Multipath** — view active multipath devices and path counts, edit multipath.conf inline, add WWID/alias entries, install multipath-tools
 - **FC** — list local Fibre Channel HBAs and fabric targets visible through them, trigger LIP rescan
-- **LVM** — set up a new LVM volume group on a multipath device and register it as shared Proxmox storage; trigger LVM discovery on secondary nodes after setup on the primary
 
 The Configure Multipath button (available from both the iSCSI and FC tabs) walks through WWID detection for a selected target and adds the appropriate entry to multipath.conf.
 
