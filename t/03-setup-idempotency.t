@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 4;
+use Test::More tests => 6;
 
 use lib 'src/perl';
 use lib 't/lib';
@@ -28,3 +28,7 @@ ok(!PVE::API2::ISCSIMultipath::session_exists(\@sessions,
 my $lvm_conf_with = "global {\n    use_lvmlockd = 1\n}\n";
 ok(PVE::API2::ISCSIMultipath::lvm_conf_has_lvmlockd($lvm_conf_with),
    'lvm_conf_has_lvmlockd: detects enabled setting');
+ok(!PVE::API2::ISCSIMultipath::lvm_conf_has_lvmlockd("global {\n}\n"),
+   'lvm_conf_has_lvmlockd: absent → false');
+ok(!PVE::API2::ISCSIMultipath::lvm_conf_has_lvmlockd("global {\n    use_lvmlockd = 0\n}\n"),
+   'lvm_conf_has_lvmlockd: use_lvmlockd=0 → false');

@@ -6,22 +6,23 @@ NODES_PM="/usr/share/perl5/PVE/API2/Nodes.pm"
 
 remove_markers() {
     local file="$1"
-    if [ ! -f "$file" ]; then
-        return
-    fi
-    if grep -q "BEGIN pve-iscsi-multipath" "$file"; then
-        # Remove Perl-style marker blocks
-        sed -i '/# BEGIN pve-iscsi-multipath/,/# END pve-iscsi-multipath/d' "$file"
-        # Remove HTML-style marker blocks
-        sed -i '/<!-- BEGIN pve-iscsi-multipath -->/,/<!-- END pve-iscsi-multipath -->/d' "$file"
+    local style="${2:-perl}"
+    [ -f "$file" ] || return 0
+    if grep -q "# BEGIN pve-iscsi-multipath" "$file" 2>/dev/null || \
+       grep -q "<!-- BEGIN pve-iscsi-multipath" "$file" 2>/dev/null; then
+        if [ "$style" = "html" ]; then
+            sed -i '/<!-- BEGIN pve-iscsi-multipath -->/,/<!-- END pve-iscsi-multipath -->/d' "$file"
+        else
+            sed -i '/# BEGIN pve-iscsi-multipath/,/# END pve-iscsi-multipath/d' "$file"
+        fi
         echo "Removed pve-iscsi-multipath markers from $file"
     fi
 }
 
 case "$1" in
     remove|upgrade|deconfigure)
-        remove_markers "$HTML_TPL"
-        remove_markers "$NODES_PM"
+        remove_markers "$NODES_PM" perl
+        remove_markers "$HTML_TPL" html
         systemctl restart pveproxy pvedaemon || true
         ;;
 esac

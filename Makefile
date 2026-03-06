@@ -3,7 +3,7 @@ VERSION=0.2.0
 JS_DEST=/usr/share/pve-manager/js
 PERL_DEST=/usr/share/perl5/PVE/API2
 
-.PHONY: all install uninstall deb test
+.PHONY: all install deb test
 
 all:
 

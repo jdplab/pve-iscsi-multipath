@@ -55,10 +55,10 @@ patch_nodes_pm() {
         echo "ERROR: Disks subclass registration not found in $NODES_PM — aborting patch." >&2
         exit 1
     fi
-    python3 - <<'PYEOF'
+    python3 - "$NODES_PM" <<'PYEOF'
 import re, sys
 
-path = '/usr/share/perl5/PVE/API2/Nodes.pm'
+path = sys.argv[1]
 with open(path, 'r') as f:
     content = f.read()
 
