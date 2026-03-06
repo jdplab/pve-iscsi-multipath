@@ -20,7 +20,7 @@ deb:
 	rm -rf debian/tmp
 	mkdir -p debian/tmp/DEBIAN
 	$(MAKE) install DESTDIR=debian/tmp
-	printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: Jonathan Polansky <jon@jon-polansky.com>\nDepends: pve-manager (>= 9.0), libpve-access-control, libpve-common-perl\nRecommends: open-iscsi, multipath-tools, lvm2, sanlock\nDescription: iSCSI and Multipath configuration plugin for Proxmox VE\n Adds iSCSI and multipath management panels to the Proxmox VE web GUI,\n including a datacenter-level setup wizard.\n' $(PACKAGE) $(VERSION) > debian/tmp/DEBIAN/control
+	printf 'Package: %s\nVersion: %s\nArchitecture: all\nMaintainer: Jonathan Polansky <jon@jon-polansky.com>\nDepends: pve-manager (>= 9.0), libpve-access-control, libpve-common-perl\nRecommends: open-iscsi, multipath-tools, lvm2, sanlock\nDescription: iSCSI, Fibre Channel, and multipath SAN management plugin for Proxmox VE\n Adds iSCSI, FC, and multipath management panels to each node in the Proxmox VE web GUI.\n' $(PACKAGE) $(VERSION) > debian/tmp/DEBIAN/control
 	install -m 0755 debian/postinst debian/tmp/DEBIAN/postinst
 	install -m 0755 debian/prerm debian/tmp/DEBIAN/prerm
 	install -m 0644 debian/triggers debian/tmp/DEBIAN/triggers
