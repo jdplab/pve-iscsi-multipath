@@ -1,1 +1,5 @@
-pve-iscsi-multipath_0.1.0_all.deb
+*.deb
+bin/
+lib/
+lib64
+pyvenv.cfg
