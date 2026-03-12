@@ -326,52 +326,119 @@ Ext.define('PVE.node.ISCSIPanel', {
                         regex: /^\S+$/,
                         regexText: gettext('No spaces allowed'),
                     },
+                    {
+                        xtype: 'proxmoxcheckbox',
+                        fieldLabel: gettext('Enable'),
+                        itemId: 'dlgEnable',
+                        labelWidth: 100,
+                        checked: true,
+                    },
+                    {
+                        xtype: 'proxmoxcheckbox',
+                        fieldLabel: gettext('Shared'),
+                        itemId: 'dlgShared',
+                        labelWidth: 100,
+                        checked: true,
+                        listeners: {
+                            change: function (cb, val) {
+                                var nodesField = dlg.down('#dlgNodes');
+                                if (!val) {
+                                    nodesField.setValue('');
+                                    nodesField.disable();
+                                } else {
+                                    nodesField.enable();
+                                }
+                            },
+                        },
+                    },
+                    {
+                        xtype: 'pveNodeSelector',
+                        fieldLabel: gettext('Nodes'),
+                        itemId: 'dlgNodes',
+                        labelWidth: 100,
+                        multiSelect: true,
+                        autoSelect: false,
+                        emptyText: gettext('All') + ' (' + gettext('No restrictions') + ')',
+                    },
+                    {
+                        xtype: 'proxmoxcheckbox',
+                        fieldLabel: gettext('Allow Snapshots as Volume-Chain'),
+                        itemId: 'dlgSnapshotChain',
+                        labelWidth: 100,
+                        checked: true,
+                    },
                 ],
                 buttons: [
                     {
                         text: gettext('Add'),
                         handler: function () {
-                            var vgName = dlg.down('#dlgVgName').getValue().trim();
+                            var vgName    = dlg.down('#dlgVgName').getValue().trim();
                             var storageId = dlg.down('#dlgStorageId').getValue().trim();
+                            var nodesVal  = dlg.down('#dlgNodes').getValue();  // '' or 'node1,node2'
                             if (!vgName || !storageId) return;
+
+                            var params = {
+                                device:     alias,
+                                vg_name:    vgName,
+                                storage_id: storageId,
+                                enable:     dlg.down('#dlgEnable').getValue() ? 1 : 0,
+                                shared:     dlg.down('#dlgShared').getValue() ? 1 : 0,
+                                snapshot_as_volume_chain: dlg.down('#dlgSnapshotChain').getValue() ? 1 : 0,
+                            };
+                            if (nodesVal) { params.nodes = nodesVal; }
 
                             dlg.setLoading(gettext('Creating LVM storage\u2026'));
                             Proxmox.Utils.API2Request({
                                 url: '/nodes/' + nodename + '/iscsi/lvm-setup',
                                 method: 'POST',
-                                params: { device: alias, vg_name: vgName, storage_id: storageId },
+                                params: params,
                                 success: function (r) {
                                     dlg.setLoading(false);
                                     var d = r.result.data;
                                     var warns = [];
-                                    if (d.pv_existed)      warns.push(gettext('PV already existed — skipped pvcreate'));
-                                    if (d.vg_existed)      warns.push(gettext('VG already existed — skipped vgcreate'));
-                                    if (d.storage_existed) warns.push(gettext('Storage already registered — skipped'));
+                                    if (d.pv_existed)      warns.push(gettext('PV already existed \u2014 skipped pvcreate'));
+                                    if (d.vg_existed)      warns.push(gettext('VG already existed \u2014 skipped vgcreate'));
+                                    if (d.storage_existed) warns.push(gettext('Storage already registered \u2014 skipped'));
                                     if (warns.length) {
                                         Ext.Msg.show({
-                                            title: gettext('Add LVM Storage'),
-                                            icon: Ext.Msg.INFO,
+                                            title:   gettext('Add LVM Storage'),
+                                            icon:    Ext.Msg.INFO,
                                             message: warns.join('<br>'),
                                             buttons: Ext.Msg.OK,
                                         });
                                     }
                                     dlg.close();
 
-                                    // Fire-and-forget lvm-scan on other cluster nodes
-                                    Proxmox.Utils.API2Request({
-                                        url: '/cluster/status',
-                                        method: 'GET',
-                                        success: function (cr) {
-                                            (cr.result.data || [])
-                                                .filter(function(n) { return n.type === 'node' && n.name !== nodename; })
-                                                .forEach(function (n) {
-                                                    Proxmox.Utils.API2Request({
-                                                        url: '/nodes/' + n.name + '/iscsi/lvm-scan',
-                                                        method: 'POST',
-                                                    });
+                                    // lvm-scan: skip entirely if not shared
+                                    if (!params.shared) return;
+
+                                    if (nodesVal) {
+                                        // Scan only selected nodes, excluding the primary
+                                        nodesVal.split(',')
+                                            .filter(function (n) { return n !== nodename; })
+                                            .forEach(function (n) {
+                                                Proxmox.Utils.API2Request({
+                                                    url: '/nodes/' + n + '/iscsi/lvm-scan',
+                                                    method: 'POST',
                                                 });
-                                        },
-                                    });
+                                            });
+                                    } else {
+                                        // All nodes: fetch cluster status and scan all non-primary nodes
+                                        Proxmox.Utils.API2Request({
+                                            url: '/cluster/status',
+                                            method: 'GET',
+                                            success: function (cr) {
+                                                (cr.result.data || [])
+                                                    .filter(function (n) { return n.type === 'node' && n.name !== nodename; })
+                                                    .forEach(function (n) {
+                                                        Proxmox.Utils.API2Request({
+                                                            url: '/nodes/' + n.name + '/iscsi/lvm-scan',
+                                                            method: 'POST',
+                                                        });
+                                                    });
+                                            },
+                                        });
+                                    }
                                 },
                                 failure: function (r) {
                                     dlg.setLoading(false);
