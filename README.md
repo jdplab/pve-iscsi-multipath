@@ -32,8 +32,8 @@ These can be installed from the iSCSI and Multipath tabs in the UI after the plu
 Download the latest `.deb` from the [Releases](https://github.com/jdplab/pve-iscsi-multipath/releases) page, then copy and install it on each node:
 
 ```bash
-scp pve-iscsi-multipath_0.2.0_all.deb root@<node>:/tmp/
-ssh root@<node> dpkg -i /tmp/pve-iscsi-multipath_0.2.0_all.deb
+scp pve-iscsi-multipath_0.3.0_all.deb root@<node>:/tmp/
+ssh root@<node> dpkg -i /tmp/pve-iscsi-multipath_0.3.0_all.deb
 ```
 
 Repeat for each node in the cluster. The postinstall script patches `Nodes.pm` and `index.html.tpl` to inject the plugin, then triggers a pve-manager reload. Hard-refresh the browser after installing on each node (`Ctrl+Shift+R`).

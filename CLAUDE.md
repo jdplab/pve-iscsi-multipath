@@ -22,9 +22,9 @@ Re-index if the source files change significantly: `cgc index .`
 ## Build & Deploy
 
 ```bash
-make deb                                          # builds pve-iscsi-multipath_0.2.0_all.deb
+make deb                                          # builds pve-iscsi-multipath_0.3.0_all.deb
 scp *.deb root@<node>:/tmp/
-ssh root@<node> dpkg -i /tmp/pve-iscsi-multipath_0.2.0_all.deb
+ssh root@<node> dpkg -i /tmp/pve-iscsi-multipath_0.3.0_all.deb
 ```
 
 Three cluster nodes: cclabhost21/22/23 at 192.168.121.21/22/23
