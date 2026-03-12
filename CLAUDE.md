@@ -16,7 +16,7 @@ Re-index if the source files change significantly: `cgc index .`
 
 - `src/perl/PVE/API2/ISCSIMultipath.pm` — all API endpoints and backend logic
 - `src/js/pve-iscsi-multipath.js` — ExtJS UI panels (iSCSI, Multipath, FC tabs)
-- `t/` — Perl test suite (55 tests), run with `make test`
+- `t/` — Perl test suite (65 tests), run with `make test`
 - `debian/` — packaging scripts (postinst patches Nodes.pm and index.html.tpl)
 
 ## Build & Deploy
