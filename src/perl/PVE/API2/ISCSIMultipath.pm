@@ -250,6 +250,26 @@ sub check_service_enabled {
     return !$@;
 }
 
+# Build the pvesm add lvm command array from storage_id, vg_name, and optional params.
+# Extracted for testability.
+sub _build_pvesm_cmd {
+    my ($storage_id, $vg_name, $param) = @_;
+    my @cmd = (
+        'pvesm', 'add', 'lvm', $storage_id,
+        '--vgname',     $vg_name,
+        '--shared',     ($param->{shared} // 1) ? 1 : 0,
+        '--content',    'images,rootdir',
+        '--saferemove', '0',
+    );
+    push @cmd, '--snapshot-as-volume-chain', '1'
+        if $param->{snapshot_as_volume_chain} // 1;
+    push @cmd, '--disable', '1'
+        unless $param->{enable} // 1;
+    push @cmd, '--nodes', $param->{nodes}
+        if $param->{nodes};
+    return \@cmd;
+}
+
 __PACKAGE__->register_method({
     name        => 'status',
     path        => 'status',
@@ -820,6 +840,27 @@ __PACKAGE__->register_method({
             device     => { type => 'string', description => 'Multipath device name under /dev/mapper (e.g. proxmox-matt)', pattern => '[a-zA-Z0-9_.@-]+' },
             vg_name    => { type => 'string', description => 'LVM volume group name', pattern => '[a-zA-Z0-9+_.@][a-zA-Z0-9+_.@-]*', maxLength => 63 },
             storage_id => { type => 'string', description => 'Proxmox storage ID', pattern => '[a-zA-Z][a-zA-Z0-9\\-_.]*', maxLength => 100 },
+            enable   => {
+                type        => 'boolean',
+                optional    => 1,
+                description => 'Enable storage after creation (default 1).',
+            },
+            shared   => {
+                type        => 'boolean',
+                optional    => 1,
+                description => 'Mark storage as shared across cluster nodes (default 1).',
+            },
+            nodes    => {
+                type        => 'string',
+                optional    => 1,
+                description => 'Comma-separated list of nodes that can use this storage. Empty means all nodes.',
+                pattern     => '^[a-zA-Z0-9-]+(,[a-zA-Z0-9-]+)*$',
+            },
+            snapshot_as_volume_chain => {
+                type        => 'boolean',
+                optional    => 1,
+                description => 'Allow snapshots as volume-chain (technology preview, default 1).',
+            },
         },
     },
     returns => {
@@ -876,11 +917,7 @@ __PACKAGE__->register_method({
         # Check / register Proxmox storage
         eval {
             _run_cmd(
-                ['pvesm', 'add', 'lvm', $storage_id,
-                 '--vgname',   $vg_name,
-                 '--shared',   '1',
-                 '--content',  'images,rootdir',
-                 '--saferemove', '0'],
+                _build_pvesm_cmd($storage_id, $vg_name, $param),
                 outfunc => sub {},
                 errfunc => sub { die "$_[0]\n" },
             );
