@@ -1,6 +1,5 @@
-*.deb
 bin/
 lib/
 lib64
 pyvenv.cfg
-.claude/
+*.deb
