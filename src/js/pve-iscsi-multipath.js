@@ -19,16 +19,16 @@ Ext.define('PVE.node.ConfigureMultipathDialog', {
     fc_wwpn: null,
 
     initComponent: function () {
-        var me = this;
+        const me = this;
 
-        var wwid = '';
+        let wwid = '';
 
-        var wwid_display = Ext.create('Ext.form.field.Display', {
+        const wwid_display = Ext.create('Ext.form.field.Display', {
             fieldLabel: 'WWID',
             value: '',
         });
 
-        var alias_field = Ext.create('Ext.form.field.Text', {
+        const alias_field = Ext.create('Ext.form.field.Text', {
             fieldLabel: gettext('Alias'),
             allowBlank: false,
             validateOnBlur: false,
@@ -44,7 +44,7 @@ Ext.define('PVE.node.ConfigureMultipathDialog', {
                     itemId: 'configureBtn',
                     disabled: true,
                     handler: function () {
-                        var alias = alias_field.getValue().trim();
+                        const alias = alias_field.getValue().trim();
                         if (!alias) {
                             alias_field.markInvalid(gettext('Alias is required'));
                             return;
@@ -76,7 +76,7 @@ Ext.define('PVE.node.ConfigureMultipathDialog', {
         // Discover WWID immediately on open
         me.setLoading(gettext('Detecting WWID\u2026'));
 
-        var params = me.fc_wwpn
+        const params = me.fc_wwpn
             ? { fc_wwpn: me.fc_wwpn }
             : { target_iqn: me.target_iqn, portal: me.portal };
 
@@ -86,7 +86,7 @@ Ext.define('PVE.node.ConfigureMultipathDialog', {
             params: params,
             success: function (response) {
                 me.setLoading(false);
-                var d = response.result.data;
+                const d = response.result.data;
 
                 if (!d.wwid) {
                     me.close();
@@ -141,7 +141,7 @@ Ext.define('PVE.node.ISCSIAddLvmDialog', {
     method: 'POST',
 
     initComponent: function() {
-        var me = this;
+        const me = this;
 
         // url MUST be set before callParent — Proxmox.window.Edit reads it at open time.
         // Ext.applyIf so the caller can override (consistent with PVE.node.CreateLVM pattern).
@@ -156,7 +156,7 @@ Ext.define('PVE.node.ISCSIAddLvmDialog', {
             items: [{
                 xtype: 'inputpanel',
                 onGetValues: function(values) {
-                    var win = this.up('window');
+                    const win = this.up('window');
 
                     // pveNodeSelector with multiSelect:true returns an array.
                     // The Perl API declares 'nodes' as a comma-separated string (type=>'string').
@@ -221,7 +221,7 @@ Ext.define('PVE.node.ISCSIAddLvmDialog', {
                         uncheckedValue: 0,
                         listeners: {
                             change: function(cb, val) {
-                                var nodesField = cb.up('inputpanel').down('[name=nodes]');
+                                const nodesField = cb.up('inputpanel').down('[name=nodes]');
                                 if (!val) {
                                     nodesField.setValue('');
                                     nodesField.disable();
@@ -255,8 +255,8 @@ Ext.define('PVE.node.ISCSIAddLvmDialog', {
 
     apiCallDone: function(success, response, options) {
         if (!success) return;
-        var d = (response.result && response.result.data) || {};
-        var warns = [];
+        const d = (response.result && response.result.data) || {};
+        const warns = [];
         if (d.pv_existed)      warns.push(gettext('PV already existed \u2014 skipped pvcreate'));
         if (d.vg_existed)      warns.push(gettext('VG already existed \u2014 skipped vgcreate'));
         if (d.storage_existed) warns.push(gettext('Storage already registered \u2014 skipped'));
@@ -282,16 +282,16 @@ Ext.define('PVE.node.ISCSIPanel', {
     },
 
     initComponent: function () {
-        var me = this;
-        var nodename = me.pveSelNode.data.node;
+        const me = this;
+        const nodename = me.pveSelNode.data.node;
         if (!nodename) throw 'no node name specified';
 
-        var portalsStore = Ext.create('Ext.data.Store', {
+        const portalsStore = Ext.create('Ext.data.Store', {
             fields: ['portal'],
             data: [],
         });
 
-        var sessionsStore = Ext.create('Ext.data.Store', {
+        const sessionsStore = Ext.create('Ext.data.Store', {
             fields: ['target_iqn', 'portal', 'state'],
             proxy: {
                 type: 'proxmox',
@@ -301,18 +301,18 @@ Ext.define('PVE.node.ISCSIPanel', {
 
         sessionsStore.on('load', function (store, records) {
             records.forEach(function (record) {
-                var portal = record.get('portal');
+                const portal = record.get('portal');
                 if (!portalsStore.findRecord('portal', portal, 0, false, false, true)) {
                     portalsStore.add({ portal: portal });
                 }
             });
         });
 
-        var reloadSessions = function () {
+        const reloadSessions = function () {
             sessionsStore.load();
         };
 
-        var portalsGrid = Ext.create('Ext.grid.Panel', {
+        const portalsGrid = Ext.create('Ext.grid.Panel', {
             title: gettext('Portals'),
             flex: 1,
             store: portalsStore,
@@ -328,7 +328,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                             gettext('Enter portal IP (e.g. 192.168.1.1 or 192.168.1.1:3260):'),
                             function (btn, value) {
                                 if (btn !== 'ok' || !value) return;
-                                var portal = value.trim();
+                                let portal = value.trim();
                                 if (!portal.match(/:/)) portal += ':3260';
                                 portalsStore.add({ portal: portal });
                             });
@@ -338,7 +338,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                     text: gettext('Remove'),
                     iconCls: 'fa fa-trash-o',
                     handler: function () {
-                        var sel = portalsGrid.getSelection();
+                        const sel = portalsGrid.getSelection();
                         if (sel.length) portalsStore.remove(sel);
                     },
                 },
@@ -346,7 +346,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                     text: gettext('Discover Targets'),
                     iconCls: 'fa fa-search',
                     handler: function () {
-                        var portals = portalsStore.collect('portal').join(',');
+                        const portals = portalsStore.collect('portal').join(',');
                         if (!portals) {
                             Ext.Msg.alert(gettext('Error'), gettext('Add at least one portal first.'));
                             return;
@@ -357,7 +357,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                             params: { portals: portals },
                             waitMsgTarget: me,
                             success: function (response) {
-                                var targets = response.result.data;
+                                const targets = response.result.data;
                                 if (!targets.length) {
                                     Ext.Msg.show({
                                         title: gettext('Discovery'),
@@ -368,17 +368,17 @@ Ext.define('PVE.node.ISCSIPanel', {
                                     return;
                                 }
                                 // Deduplicate by IQN — one row per target
-                                var seen = {};
-                                var unique = targets.filter(function (t) {
+                                const seen = {};
+                                const unique = targets.filter(function (t) {
                                     if (seen[t.target_iqn]) return false;
                                     seen[t.target_iqn] = true;
                                     return true;
                                 });
-                                var discStore = Ext.create('Ext.data.Store', {
+                                const discStore = Ext.create('Ext.data.Store', {
                                     fields: ['target_iqn', 'portal'],
                                     data: unique,
                                 });
-                                var discGrid = Ext.create('Ext.grid.Panel', {
+                                const discGrid = Ext.create('Ext.grid.Panel', {
                                     store: discStore,
                                     selModel: { selType: 'checkboxmodel', mode: 'MULTI' },
                                     columns: [
@@ -388,7 +388,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                                     height: 200,
                                     border: false,
                                 });
-                                var discWin = Ext.create('Ext.window.Window', {
+                                const discWin = Ext.create('Ext.window.Window', {
                                     title: gettext('Discovered Targets'),
                                     width: 580,
                                     modal: true,
@@ -399,10 +399,11 @@ Ext.define('PVE.node.ISCSIPanel', {
                                             text: gettext('Login Selected'),
                                             iconCls: 'fa fa-plug',
                                             handler: function () {
-                                                var sel = discGrid.getSelection();
+                                                const sel = discGrid.getSelection();
                                                 if (!sel.length) return;
-                                                var portals = portalsStore.collect('portal');
-                                                var done = 0, total = sel.length * portals.length;
+                                                const portals = portalsStore.collect('portal');
+                                                let done = 0;
+                                                const total = sel.length * portals.length;
                                                 sel.forEach(function (rec) {
                                                     portals.forEach(function (portal) {
                                                         Proxmox.Utils.API2Request({
@@ -437,7 +438,7 @@ Ext.define('PVE.node.ISCSIPanel', {
             ],
         });
 
-        var sessionsGrid = Ext.create('Ext.grid.Panel', {
+        const sessionsGrid = Ext.create('Ext.grid.Panel', {
             title: gettext('Sessions'),
             flex: 2,
             store: sessionsStore,
@@ -456,9 +457,9 @@ Ext.define('PVE.node.ISCSIPanel', {
                     text: gettext('Login'),
                     iconCls: 'fa fa-plug',
                     handler: function () {
-                        var sel = sessionsGrid.getSelection();
+                        const sel = sessionsGrid.getSelection();
                         if (!sel.length) return;
-                        var portals = portalsStore.collect('portal');
+                        const portals = portalsStore.collect('portal');
                         if (!portals.length) {
                             Ext.Msg.alert(gettext('Error'), gettext('Add portals first.'));
                             return;
@@ -483,7 +484,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                     text: gettext('Logout'),
                     iconCls: 'fa fa-sign-out',
                     handler: function () {
-                        var sel = sessionsGrid.getSelection();
+                        const sel = sessionsGrid.getSelection();
                         if (!sel.length) return;
                         Proxmox.Utils.API2Request({
                             url: '/nodes/' + nodename + '/iscsi/logout',
@@ -503,7 +504,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                     text: gettext('Set Auto-Login'),
                     iconCls: 'fa fa-clock-o',
                     handler: function () {
-                        var sel = sessionsGrid.getSelection();
+                        const sel = sessionsGrid.getSelection();
                         if (!sel.length) return;
                         Ext.Msg.show({
                             title: gettext('Set Auto-Login Mode'),
@@ -535,7 +536,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                     itemId: 'iscsiConfigMpBtn',
                     disabled: true,
                     handler: function () {
-                        var sel = sessionsGrid.getSelection();
+                        const sel = sessionsGrid.getSelection();
                         if (!sel.length) return;
                         Ext.create('PVE.node.ConfigureMultipathDialog', {
                             nodename: nodename,
@@ -550,10 +551,10 @@ Ext.define('PVE.node.ISCSIPanel', {
                     itemId: 'iscsiAddLvmBtn',
                     disabled: true,
                     handler: function () {
-                        var sel = sessionsGrid.getSelection();
+                        const sel = sessionsGrid.getSelection();
                         if (!sel.length) return;
-                        var target_iqn = sel[0].get('target_iqn');
-                        var portal = sel[0].get('portal');
+                        const target_iqn = sel[0].get('target_iqn');
+                        const portal = sel[0].get('portal');
 
                         // Get WWID/alias for this session to pre-fill fields
                         Proxmox.Utils.API2Request({
@@ -561,7 +562,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                             method: 'GET',
                             params: { target_iqn: target_iqn, portal: portal },
                             success: function (response) {
-                                var d = response.result.data;
+                                const d = response.result.data;
                                 if (!d.wwid) {
                                     Ext.Msg.show({
                                         title: gettext('Add LVM Storage'),
@@ -571,7 +572,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                                     });
                                     return;
                                 }
-                                var alias = d.existing_alias || d.wwid;
+                                const alias = d.existing_alias || d.wwid;
                                 Ext.create('PVE.node.ISCSIAddLvmDialog', {
                                     nodename:    nodename,
                                     deviceAlias: alias,
@@ -583,7 +584,7 @@ Ext.define('PVE.node.ISCSIPanel', {
                                             // unchecked (false/0) — neither case should trigger lvm-scan.
                                             if (!win.submittedShared) return;
 
-                                            var nodesVal = win.submittedNodes;
+                                            const nodesVal = win.submittedNodes;
                                             if (nodesVal) {
                                                 // Scan only selected nodes, skipping the current node
                                                 nodesVal.split(',')
@@ -647,11 +648,11 @@ Ext.define('PVE.node.MultipathPanel', {
     layout: 'fit',
 
     initComponent: function () {
-        var me = this;
-        var nodename = me.pveSelNode.data.node;
+        const me = this;
+        const nodename = me.pveSelNode.data.node;
         if (!nodename) throw 'no node name specified';
 
-        var statusStore = Ext.create('Ext.data.Store', {
+        const statusStore = Ext.create('Ext.data.Store', {
             fields: ['alias', 'wwid', 'paths', 'state'],
             proxy: {
                 type: 'proxmox',
@@ -659,14 +660,14 @@ Ext.define('PVE.node.MultipathPanel', {
             },
         });
 
-        var reload = function () { statusStore.load(); };
+        const reload = function () { statusStore.load(); };
 
-        var editConfig = function () {
+        const editConfig = function () {
             Proxmox.Utils.API2Request({
                 url: '/nodes/' + nodename + '/iscsi/multipath/config',
                 method: 'GET',
                 success: function (response) {
-                    var content = response.result.data.content;
+                    const content = response.result.data.content;
                     Ext.create('Proxmox.window.Edit', {
                         title: gettext('Edit /etc/multipath.conf'),
                         width: 700,
@@ -746,11 +747,11 @@ Ext.define('PVE.node.FCPanel', {
     },
 
     initComponent: function () {
-        var me = this;
-        var nodename = me.pveSelNode.data.node;
+        const me = this;
+        const nodename = me.pveSelNode.data.node;
         if (!nodename) throw 'no node name specified';
 
-        var hbasStore = Ext.create('Ext.data.Store', {
+        const hbasStore = Ext.create('Ext.data.Store', {
             fields: ['name', 'port_name', 'node_name', 'port_state', 'speed', 'symbolic_name'],
             proxy: {
                 type: 'proxmox',
@@ -758,7 +759,7 @@ Ext.define('PVE.node.FCPanel', {
             },
         });
 
-        var targetsStore = Ext.create('Ext.data.Store', {
+        const targetsStore = Ext.create('Ext.data.Store', {
             fields: ['port_name', 'node_name', 'hba', 'port_state'],
             proxy: {
                 type: 'proxmox',
@@ -766,12 +767,12 @@ Ext.define('PVE.node.FCPanel', {
             },
         });
 
-        var reload = function () {
+        const reload = function () {
             hbasStore.load();
             targetsStore.load();
         };
 
-        var rescan = function () {
+        const rescan = function () {
             Proxmox.Utils.API2Request({
                 url: '/nodes/' + nodename + '/iscsi/fc/rescan',
                 method: 'POST',
@@ -785,12 +786,12 @@ Ext.define('PVE.node.FCPanel', {
             });
         };
 
-        var stateRenderer = function (v) {
-            var color = (v === 'Online') ? '#2c9142' : '#cc2a2a';
+        const stateRenderer = function (v) {
+            const color = (v === 'Online') ? '#2c9142' : '#cc2a2a';
             return '<span style="color:' + color + '">' + Ext.String.htmlEncode(v || '') + '</span>';
         };
 
-        var fcTargetsGrid = Ext.create('Ext.grid.Panel', {
+        const fcTargetsGrid = Ext.create('Ext.grid.Panel', {
             title: gettext('Connected FC Targets'),
             flex: 2,
             store: targetsStore,
@@ -806,7 +807,7 @@ Ext.define('PVE.node.FCPanel', {
                     itemId: 'fcConfigMpBtn',
                     disabled: true,
                     handler: function () {
-                        var sel = fcTargetsGrid.getSelection();
+                        const sel = fcTargetsGrid.getSelection();
                         if (!sel.length) return;
                         Ext.create('PVE.node.ConfigureMultipathDialog', {
                             nodename: nodename,
@@ -865,10 +866,10 @@ Ext.define(null, {
     override: 'PVE.panel.Config',
 
     initComponent: function () {
-        var me = this;
+        const me = this;
 
         if (me.$className === 'PVE.node.Config') {
-            var caps = Ext.state.Manager.get('GuiCap');
+            const caps = Ext.state.Manager.get('GuiCap');
             if (caps && caps.nodes && caps.nodes['Sys.Audit']) {
                 if (!Ext.isArray(me.items)) me.items = [];
                 me.items.push(
