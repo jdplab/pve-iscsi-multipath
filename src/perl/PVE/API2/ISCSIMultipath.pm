@@ -6,6 +6,7 @@ use warnings;
 use Fcntl qw(:flock);
 use PVE::JSONSchema qw(get_standard_option);
 use PVE::RPCEnvironment;
+use PVE::Tools qw(run_command);
 
 use base qw(PVE::RESTHandler);
 
@@ -223,8 +224,36 @@ sub _fc_host_for_wwpn {
 # Thin wrapper around system commands — can be mocked in tests
 sub _run_cmd {
     my ($cmd, %opts) = @_;
-    require PVE::Tools;
-    PVE::Tools::run_command($cmd, %opts);
+    run_command($cmd, %opts);
+}
+
+# Ensure a PV exists on $dev_path, creating it if necessary.
+# Returns 1 if the PV already existed (either cached or imported from another
+# node via pvscan), 0 if a fresh PV was created.
+# Dies if the PV cannot be created or imported.
+sub _ensure_pv {
+    my ($dev_path) = @_;
+
+    # Fast path: PV already known to the local LVM cache.
+    eval { _run_cmd(['pvdisplay', $dev_path], outfunc => sub {}, errfunc => sub {}) };
+    return 1 unless $@;
+
+    # PV not cached. Try pvcreate (the normal "first node" path).
+    my $pvcreate_err;
+    eval { _run_cmd(['pvcreate', $dev_path], outfunc => sub {}) };
+    if (!$@) {
+        return 0;  # fresh PV created
+    }
+    $pvcreate_err = $@;
+
+    # pvcreate failed — the device may already carry PV metadata written by
+    # another cluster node (LVM on this node just hasn't scanned it yet).
+    # Run pvscan --cache to import the on-disk metadata and retry pvdisplay.
+    eval { _run_cmd(['pvscan', '--cache', $dev_path], outfunc => sub {}, errfunc => sub {}) };
+    eval { _run_cmd(['pvdisplay', $dev_path], outfunc => sub {}, errfunc => sub {}) };
+    die $pvcreate_err if $@;  # still not found → rethrow original error
+
+    return 1;  # PV imported from another node
 }
 
 sub check_package_installed {
@@ -284,7 +313,41 @@ __PACKAGE__->register_method({
             node => get_standard_option('pve-node'),
         },
     },
-    returns => { type => 'object' },
+    returns => {
+        type       => 'object',
+        properties => {
+            packages => {
+                type        => 'object',
+                description => 'Installed package flags (1=installed, 0=missing).',
+            },
+            services => {
+                type        => 'object',
+                description => 'Service status map (running/enabled flags per service).',
+            },
+            sessions => {
+                type        => 'array',
+                description => 'Active iSCSI sessions.',
+                items       => { type => 'object' },
+            },
+            multipath_config_exists => {
+                type        => 'boolean',
+                description => '1 if /etc/multipath.conf exists.',
+            },
+            multipath_devices => {
+                type        => 'array',
+                description => 'Multipath devices from multipathd.',
+                items       => { type => 'object' },
+            },
+            fc_hba_count => {
+                type        => 'integer',
+                description => 'Total number of FC HBAs.',
+            },
+            fc_hbas_online => {
+                type        => 'integer',
+                description => 'Number of FC HBAs with port_state=Online.',
+            },
+        },
+    },
     code => sub {
         my ($param) = @_;
 
@@ -348,7 +411,17 @@ __PACKAGE__->register_method({
             },
         },
     },
-    returns => { type => 'array', items => { type => 'object' } },
+    returns => {
+        type  => 'array',
+        items => {
+            type       => 'object',
+            properties => {
+                target_iqn => { type => 'string', description => 'Target IQN.' },
+                portal     => { type => 'string', description => 'Portal IP:port.' },
+                tpgt       => { type => 'string', description => 'Target portal group tag.' },
+            },
+        },
+    },
     code => sub {
         my ($param) = @_;
         my @portals = split /,/, $param->{portals};
@@ -381,7 +454,17 @@ __PACKAGE__->register_method({
         additionalProperties => 0,
         properties => { node => get_standard_option('pve-node') },
     },
-    returns => { type => 'array', items => { type => 'object' } },
+    returns => {
+        type  => 'array',
+        items => {
+            type       => 'object',
+            properties => {
+                portal     => { type => 'string', description => 'Portal IP:port.' },
+                target_iqn => { type => 'string', description => 'Target IQN.' },
+                state      => { type => 'string', description => 'Session state.' },
+            },
+        },
+    },
     code => sub {
         my ($param) = @_;
         my $out = '';
@@ -406,8 +489,8 @@ __PACKAGE__->register_method({
             node       => get_standard_option('pve-node'),
             target_iqn => { type => 'string', description => 'Target IQN',
                             pattern => '^iqn\.\d{4}-\d{2}\.[\w.-]+:[\w.:-]+$' },
-            portal     => { type => 'string', description => 'Portal IP:port',
-                            pattern => '^[\d.]+(?::\d+)?$' },
+            portal     => { type => 'string', description => 'Portal address (IP or DNS name with optional port).',
+                            format => 'pve-storage-portal-dns' },
         },
     },
     returns => { type => 'object', properties => {
@@ -448,8 +531,8 @@ __PACKAGE__->register_method({
             node       => get_standard_option('pve-node'),
             target_iqn => { type => 'string',
                             pattern => '^iqn\.\d{4}-\d{2}\.[\w.-]+:[\w.:-]+$' },
-            portal     => { type => 'string',
-                            pattern => '^[\d.]+(?::\d+)?$' },
+            portal     => { type => 'string', description => 'Portal address (IP or DNS name with optional port).',
+                            format => 'pve-storage-portal-dns' },
         },
     },
     returns => { type => 'null' },
@@ -477,8 +560,8 @@ __PACKAGE__->register_method({
             node       => get_standard_option('pve-node'),
             target_iqn => { type => 'string',
                             pattern => '^iqn\.\d{4}-\d{2}\.[\w.-]+:[\w.:-]+$' },
-            portal     => { type => 'string',
-                            pattern => '^[\d.]+(?::\d+)?$' },
+            portal     => { type => 'string', description => 'Portal address (IP or DNS name with optional port).',
+                            format => 'pve-storage-portal-dns' },
             mode       => {
                 type => 'string',
                 enum => ['automatic', 'manual', 'onboot'],
@@ -510,7 +593,21 @@ __PACKAGE__->register_method({
         additionalProperties => 0,
         properties => { node => get_standard_option('pve-node') },
     },
-    returns => { type => 'array', items => { type => 'object' } },
+    returns => {
+        type  => 'array',
+        items => {
+            type       => 'object',
+            properties => {
+                name          => { type => 'string', description => 'HBA host name (e.g. host0).' },
+                port_name     => { type => 'string', description => 'HBA port WWN.' },
+                node_name     => { type => 'string', description => 'HBA node WWN.' },
+                port_state    => { type => 'string', description => 'Port state (e.g. Online).' },
+                port_type     => { type => 'string', description => 'Port type.' },
+                speed         => { type => 'string', description => 'Link speed.' },
+                symbolic_name => { type => 'string', description => 'Symbolic name.' },
+            },
+        },
+    },
     code => sub {
         my ($param) = @_;
         return parse_fc_hbas();
@@ -529,7 +626,18 @@ __PACKAGE__->register_method({
         additionalProperties => 0,
         properties => { node => get_standard_option('pve-node') },
     },
-    returns => { type => 'array', items => { type => 'object' } },
+    returns => {
+        type  => 'array',
+        items => {
+            type       => 'object',
+            properties => {
+                port_name  => { type => 'string', description => 'Target port WWN.' },
+                node_name  => { type => 'string', description => 'Target node WWN.' },
+                port_state => { type => 'string', description => 'Port state.' },
+                hba        => { type => 'string', description => 'Local HBA host name.' },
+            },
+        },
+    },
     code => sub {
         my ($param) = @_;
         return parse_fc_targets();
@@ -573,7 +681,18 @@ __PACKAGE__->register_method({
         additionalProperties => 0,
         properties => { node => get_standard_option('pve-node') },
     },
-    returns => { type => 'array', items => { type => 'object' } },
+    returns => {
+        type  => 'array',
+        items => {
+            type       => 'object',
+            properties => {
+                alias  => { type => 'string',  description => 'Device alias name.' },
+                wwid   => { type => 'string',  description => 'Device WWID.' },
+                paths  => { type => 'integer', description => 'Number of active paths.' },
+                state  => { type => 'string',  description => 'Device state.' },
+            },
+        },
+    },
     code => sub {
         my ($param) = @_;
         my $out = '';
@@ -866,9 +985,9 @@ __PACKAGE__->register_method({
     returns => {
         type => 'object',
         properties => {
-            pv_existed      => { type => 'integer', description => '1 if PV already existed' },
-            vg_existed      => { type => 'integer', description => '1 if VG already existed' },
-            storage_existed => { type => 'integer', description => '1 if Proxmox storage already registered' },
+            pv_existed      => { type => 'boolean', description => 'True if PV already existed.' },
+            vg_existed      => { type => 'boolean', description => 'True if VG already existed.' },
+            storage_existed => { type => 'boolean', description => 'True if Proxmox storage was already registered.' },
         },
     },
     code => sub {
@@ -883,13 +1002,9 @@ __PACKAGE__->register_method({
         my $vg_existed = 0;
         my $storage_existed = 0;
 
-        # Check / create PV
-        eval { _run_cmd(['pvdisplay', $dev_path], outfunc => sub {}, errfunc => sub {}) };
-        if (!$@) {
-            $pv_existed = 1;
-        } else {
-            _run_cmd(['pvcreate', $dev_path], outfunc => sub {});
-        }
+        # Check / create PV (falls back to pvscan --cache when pvcreate fails
+        # because another node already wrote PV metadata to the device).
+        $pv_existed = _ensure_pv($dev_path);
 
         # Check / create VG
         my $vg_check = 0;
