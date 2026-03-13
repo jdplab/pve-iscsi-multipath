@@ -8,7 +8,7 @@ A plugin for Proxmox VE that adds iSCSI, Fibre Channel, and multipath SAN manage
 
 Each node gets three new tabs in the Proxmox web UI:
 
-- **iSCSI** — discover targets, manage sessions, set auto-login startup mode, install the open-iscsi package; includes an LVM Setup button to create a volume group on a multipath device and register it as shared Proxmox storage
+- **iSCSI** — discover targets, manage sessions, set auto-login startup mode, install the open-iscsi package; includes an LVM Setup button to create a PV/VG on a multipath device and register it as Proxmox storage (with options for shared/node-restricted, enable on creation, and snapshot-chain support)
 - **Multipath** — view active multipath devices and path counts, edit multipath.conf inline, add WWID/alias entries, install multipath-tools
 - **FC** — list local Fibre Channel HBAs and fabric targets visible through them, trigger LIP rescan
 
@@ -32,8 +32,8 @@ These can be installed from the iSCSI and Multipath tabs in the UI after the plu
 Download the latest `.deb` from the [Releases](https://github.com/jdplab/pve-iscsi-multipath/releases) page, then copy and install it on each node:
 
 ```bash
-scp pve-iscsi-multipath_0.3.0_all.deb root@<node>:/tmp/
-ssh root@<node> dpkg -i /tmp/pve-iscsi-multipath_0.3.0_all.deb
+scp pve-iscsi-multipath_<version>_all.deb root@<node>:/tmp/
+ssh root@<node> dpkg -i /tmp/pve-iscsi-multipath_<version>_all.deb
 ```
 
 Repeat for each node in the cluster. The postinstall script patches `Nodes.pm` and `index.html.tpl` to inject the plugin, then triggers a pve-manager reload. Hard-refresh the browser after installing on each node (`Ctrl+Shift+R`).
@@ -57,9 +57,12 @@ Notable endpoints:
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `status` | iSCSI sessions, multipath devices, package/service status, FC HBA info |
+| GET | `sessions` | List active iSCSI sessions |
 | POST | `discover` | Run sendtargets discovery against one or more portals |
 | POST | `login` | Login to an iSCSI target |
 | POST | `logout` | Logout from an iSCSI target |
+| PUT | `startup` | Set auto-login startup mode for an iSCSI target |
+| GET | `multipath/status` | List active multipath devices with alias, WWID, path count, and state |
 | GET | `multipath/wwid` | Detect WWID for an iSCSI or FC target |
 | GET | `multipath/config` | Read /etc/multipath.conf |
 | PUT | `multipath/config` | Write /etc/multipath.conf and restart multipathd |
