@@ -127,9 +127,154 @@ Ext.define('PVE.node.ConfigureMultipathDialog', {
     },
 });
 
+Ext.define('PVE.node.ISCSIAddLvmDialog', {
+    extend: 'Proxmox.window.Edit',
+
+    // Both must be set by caller before .show().
+    // NOTE: 'alias' is reserved by Ext.define for widget alias registration;
+    // the multipath alias is stored under 'deviceAlias' instead.
+    nodename:    null,
+    deviceAlias: null,
+
+    subject: gettext('LVM Storage'),
+    isCreate: true,
+    method: 'POST',
+
+    initComponent: function() {
+        var me = this;
+
+        // url MUST be set before callParent — Proxmox.window.Edit reads it at open time.
+        // Ext.applyIf so the caller can override (consistent with PVE.node.CreateLVM pattern).
+        Ext.applyIf(me, {
+            url: '/nodes/' + me.nodename + '/iscsi/lvm-setup',
+        });
+
+        // Items are wrapped in Proxmox.panel.InputPanel rather than passed as a flat
+        // items array (as in PVE.node.CreateLVM) because we need onGetValues to perform
+        // pre-submit transforms. This deviation from CreateLVM is intentional.
+        Ext.apply(me, {
+            items: [{
+                xtype: 'inputpanel',
+                onGetValues: function(values) {
+                    var win = this.up('window');
+
+                    // pveNodeSelector with multiSelect:true returns an array.
+                    // The Perl API declares 'nodes' as a comma-separated string (type=>'string').
+                    // Join the array; use delete (not undefined) so absent key = all nodes.
+                    if (Ext.isArray(values.nodes) && values.nodes.length) {
+                        values.nodes = values.nodes.join(',');
+                    } else {
+                        delete values.nodes;
+                    }
+
+                    // Stash final values for the destroy callback.
+                    // onGetValues runs only on submit, never on cancel.
+                    // win.submittedShared is undefined on cancel, false/0 when Shared is unchecked.
+                    // The destroy guard (!win.submittedShared) intentionally covers both cases:
+                    // neither cancel nor shared=0 should trigger lvm-scan on remote nodes.
+                    win.submittedShared = !!values.shared;
+                    win.submittedNodes  = values.nodes || '';
+
+                    // 'device' is not in the form (displayfield.submitValue=false by default).
+                    // Inject it from the dialog config so the Perl API receives it.
+                    values.device = win.deviceAlias;
+
+                    return values;
+                },
+                items: [
+                    {
+                        xtype: 'displayfield',
+                        fieldLabel: gettext('Device'),
+                        // submitValue defaults to false on displayfield — not sent in POST
+                        value: '/dev/mapper/' + me.deviceAlias,
+                    },
+                    {
+                        xtype: 'textfield',
+                        name: 'vg_name',
+                        fieldLabel: gettext('VG Name'),
+                        value: me.deviceAlias + '-vg',
+                        allowBlank: false,
+                        regex: /^\S+$/,
+                        regexText: gettext('No spaces allowed'),
+                    },
+                    {
+                        xtype: 'textfield',
+                        name: 'storage_id',
+                        fieldLabel: gettext('Storage ID'),
+                        value: me.deviceAlias,
+                        allowBlank: false,
+                        regex: /^\S+$/,
+                        regexText: gettext('No spaces allowed'),
+                    },
+                    {
+                        xtype: 'proxmoxcheckbox',
+                        name: 'enable',
+                        fieldLabel: gettext('Enable'),
+                        checked: true,
+                        uncheckedValue: 0,
+                    },
+                    {
+                        xtype: 'proxmoxcheckbox',
+                        name: 'shared',
+                        fieldLabel: gettext('Shared'),
+                        checked: true,
+                        uncheckedValue: 0,
+                        listeners: {
+                            change: function(cb, val) {
+                                var nodesField = cb.up('inputpanel').down('[name=nodes]');
+                                if (!val) {
+                                    nodesField.setValue('');
+                                    nodesField.disable();
+                                } else {
+                                    nodesField.enable();
+                                }
+                            },
+                        },
+                    },
+                    {
+                        xtype: 'pveNodeSelector',
+                        name: 'nodes',
+                        fieldLabel: gettext('Nodes'),
+                        multiSelect: true,
+                        autoSelect: false,
+                        emptyText: gettext('All') + ' (' + gettext('No restrictions') + ')',
+                    },
+                    {
+                        xtype: 'proxmoxcheckbox',
+                        name: 'snapshot_as_volume_chain',
+                        fieldLabel: gettext('Allow Snapshots as Volume-Chain'),
+                        checked: true,
+                        uncheckedValue: 0,
+                    },
+                ],
+            }],
+        });
+
+        me.callParent();
+    },
+
+    apiCallDone: function(success, response, options) {
+        if (!success) return;
+        var d = (response.result && response.result.data) || {};
+        var warns = [];
+        if (d.pv_existed)      warns.push(gettext('PV already existed \u2014 skipped pvcreate'));
+        if (d.vg_existed)      warns.push(gettext('VG already existed \u2014 skipped vgcreate'));
+        if (d.storage_existed) warns.push(gettext('Storage already registered \u2014 skipped'));
+        if (warns.length) {
+            Ext.Msg.show({
+                title:   gettext('Add LVM Storage'),
+                icon:    Ext.Msg.INFO,
+                message: warns.join('<br>'),
+                buttons: Ext.Msg.OK,
+            });
+        }
+    },
+});
+
 Ext.define('PVE.node.ISCSIPanel', {
     extend: 'Ext.panel.Panel',
     xtype: 'pveNodeISCSIPanel',
+    onlineHelp: 'chapter_storage',
 
     layout: {
         type: 'hbox',
@@ -292,170 +437,6 @@ Ext.define('PVE.node.ISCSIPanel', {
             ],
         });
 
-        var showAddLvmDialog = function (alias) {
-            var dlg = Ext.create('Ext.window.Window', {
-                title: gettext('Add LVM Storage'),
-                width: 420,
-                modal: true,
-                resizable: false,
-                bodyPadding: 10,
-                items: [
-                    {
-                        xtype: 'displayfield',
-                        fieldLabel: gettext('Device'),
-                        value: '/dev/mapper/' + alias,
-                        labelWidth: 100,
-                    },
-                    {
-                        xtype: 'textfield',
-                        fieldLabel: gettext('VG Name'),
-                        itemId: 'dlgVgName',
-                        labelWidth: 100,
-                        value: alias + '-vg',
-                        allowBlank: false,
-                        regex: /^\S+$/,
-                        regexText: gettext('No spaces allowed'),
-                    },
-                    {
-                        xtype: 'textfield',
-                        fieldLabel: gettext('Storage ID'),
-                        itemId: 'dlgStorageId',
-                        labelWidth: 100,
-                        value: alias,
-                        allowBlank: false,
-                        regex: /^\S+$/,
-                        regexText: gettext('No spaces allowed'),
-                    },
-                    {
-                        xtype: 'proxmoxcheckbox',
-                        fieldLabel: gettext('Enable'),
-                        itemId: 'dlgEnable',
-                        labelWidth: 100,
-                        checked: true,
-                    },
-                    {
-                        xtype: 'proxmoxcheckbox',
-                        fieldLabel: gettext('Shared'),
-                        itemId: 'dlgShared',
-                        labelWidth: 100,
-                        checked: true,
-                        listeners: {
-                            change: function (cb, val) {
-                                var nodesField = dlg.down('#dlgNodes');
-                                if (!val) {
-                                    nodesField.setValue('');
-                                    nodesField.disable();
-                                } else {
-                                    nodesField.enable();
-                                }
-                            },
-                        },
-                    },
-                    {
-                        xtype: 'pveNodeSelector',
-                        fieldLabel: gettext('Nodes'),
-                        itemId: 'dlgNodes',
-                        labelWidth: 100,
-                        multiSelect: true,
-                        autoSelect: false,
-                        emptyText: gettext('All') + ' (' + gettext('No restrictions') + ')',
-                    },
-                    {
-                        xtype: 'proxmoxcheckbox',
-                        fieldLabel: gettext('Allow Snapshots as Volume-Chain'),
-                        itemId: 'dlgSnapshotChain',
-                        labelWidth: 100,
-                        checked: true,
-                    },
-                ],
-                buttons: [
-                    {
-                        text: gettext('Add'),
-                        handler: function () {
-                            var vgName    = dlg.down('#dlgVgName').getValue().trim();
-                            var storageId = dlg.down('#dlgStorageId').getValue().trim();
-                            var nodesVal  = dlg.down('#dlgNodes').getValue();  // '' or 'node1,node2'
-                            if (!vgName || !storageId) return;
-
-                            var params = {
-                                device:     alias,
-                                vg_name:    vgName,
-                                storage_id: storageId,
-                                enable:     dlg.down('#dlgEnable').getValue() ? 1 : 0,
-                                shared:     dlg.down('#dlgShared').getValue() ? 1 : 0,
-                                snapshot_as_volume_chain: dlg.down('#dlgSnapshotChain').getValue() ? 1 : 0,
-                            };
-                            if (nodesVal) { params.nodes = nodesVal; }
-
-                            dlg.setLoading(gettext('Creating LVM storage\u2026'));
-                            Proxmox.Utils.API2Request({
-                                url: '/nodes/' + nodename + '/iscsi/lvm-setup',
-                                method: 'POST',
-                                params: params,
-                                success: function (r) {
-                                    dlg.setLoading(false);
-                                    var d = r.result.data;
-                                    var warns = [];
-                                    if (d.pv_existed)      warns.push(gettext('PV already existed \u2014 skipped pvcreate'));
-                                    if (d.vg_existed)      warns.push(gettext('VG already existed \u2014 skipped vgcreate'));
-                                    if (d.storage_existed) warns.push(gettext('Storage already registered \u2014 skipped'));
-                                    if (warns.length) {
-                                        Ext.Msg.show({
-                                            title:   gettext('Add LVM Storage'),
-                                            icon:    Ext.Msg.INFO,
-                                            message: warns.join('<br>'),
-                                            buttons: Ext.Msg.OK,
-                                        });
-                                    }
-                                    dlg.close();
-
-                                    // lvm-scan: skip entirely if not shared
-                                    if (!params.shared) return;
-
-                                    if (nodesVal) {
-                                        // Scan only selected nodes, excluding the primary
-                                        nodesVal.split(',')
-                                            .filter(function (n) { return n !== nodename; })
-                                            .forEach(function (n) {
-                                                Proxmox.Utils.API2Request({
-                                                    url: '/nodes/' + n + '/iscsi/lvm-scan',
-                                                    method: 'POST',
-                                                });
-                                            });
-                                    } else {
-                                        // All nodes: fetch cluster status and scan all non-primary nodes
-                                        Proxmox.Utils.API2Request({
-                                            url: '/cluster/status',
-                                            method: 'GET',
-                                            success: function (cr) {
-                                                (cr.result.data || [])
-                                                    .filter(function (n) { return n.type === 'node' && n.name !== nodename; })
-                                                    .forEach(function (n) {
-                                                        Proxmox.Utils.API2Request({
-                                                            url: '/nodes/' + n.name + '/iscsi/lvm-scan',
-                                                            method: 'POST',
-                                                        });
-                                                    });
-                                            },
-                                        });
-                                    }
-                                },
-                                failure: function (r) {
-                                    dlg.setLoading(false);
-                                    Ext.Msg.alert(gettext('Error'), r.htmlStatus);
-                                },
-                            });
-                        },
-                    },
-                    {
-                        text: gettext('Cancel'),
-                        handler: function () { dlg.close(); },
-                    },
-                ],
-            });
-            dlg.show();
-        };
-
         var sessionsGrid = Ext.create('Ext.grid.Panel', {
             title: gettext('Sessions'),
             flex: 2,
@@ -591,7 +572,48 @@ Ext.define('PVE.node.ISCSIPanel', {
                                     return;
                                 }
                                 var alias = d.existing_alias || d.wwid;
-                                showAddLvmDialog(alias);
+                                Ext.create('PVE.node.ISCSIAddLvmDialog', {
+                                    nodename:    nodename,
+                                    deviceAlias: alias,
+                                    listeners: {
+                                        destroy: function(win) {
+                                            // win.submittedShared is only set by onGetValues, which only
+                                            // runs on submit (never on cancel). !win.submittedShared
+                                            // covers both user cancel (undefined) and submit with Shared
+                                            // unchecked (false/0) — neither case should trigger lvm-scan.
+                                            if (!win.submittedShared) return;
+
+                                            var nodesVal = win.submittedNodes;
+                                            if (nodesVal) {
+                                                // Scan only selected nodes, skipping the current node
+                                                nodesVal.split(',')
+                                                    .filter(function(n) { return n !== nodename; })
+                                                    .forEach(function(n) {
+                                                        Proxmox.Utils.API2Request({
+                                                            url: '/nodes/' + n + '/iscsi/lvm-scan',
+                                                            method: 'POST',
+                                                        });
+                                                    });
+                                            } else {
+                                                // No nodes specified means all nodes — fetch cluster and scan all others
+                                                Proxmox.Utils.API2Request({
+                                                    url: '/cluster/status',
+                                                    method: 'GET',
+                                                    success: function(cr) {
+                                                        (cr.result.data || [])
+                                                            .filter(function(n) { return n.type === 'node' && n.name !== nodename; })
+                                                            .forEach(function(n) {
+                                                                Proxmox.Utils.API2Request({
+                                                                    url: '/nodes/' + n.name + '/iscsi/lvm-scan',
+                                                                    method: 'POST',
+                                                                });
+                                                            });
+                                                    },
+                                                });
+                                            }
+                                        },
+                                    },
+                                }).show();
                             },
                             failure: function (r) {
                                 Ext.Msg.alert(gettext('Error'), r.htmlStatus);
@@ -620,6 +642,7 @@ Ext.define('PVE.node.ISCSIPanel', {
 Ext.define('PVE.node.MultipathPanel', {
     extend: 'Ext.panel.Panel',
     xtype: 'pveNodeMultipathPanel',
+    onlineHelp: 'chapter_storage',
 
     layout: 'fit',
 
@@ -715,6 +738,7 @@ Ext.define('PVE.node.MultipathPanel', {
 Ext.define('PVE.node.FCPanel', {
     extend: 'Ext.panel.Panel',
     xtype: 'pveNodeFCPanel',
+    onlineHelp: 'chapter_storage',
 
     layout: {
         type: 'hbox',
