@@ -5,3 +5,5 @@ lib64
 pyvenv.cfg
 .claude/
 docs/plans/
+docs/superpowers/
+pve-context/
